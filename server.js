@@ -45,6 +45,9 @@ function mapPlan(plan, networkId){
   else if(networkId===2) table=glo;
   else if(networkId===3) table=nine;
   else table=Object.assign({},mtn,airtel,glo,nine);
+  // Extra 9Mobile/Airtel big plans from last screenshot
+  var extra={'9mobile corporate 7.5gb':280,'9mobile corporate 11gb':281,'9mobile awoof 2gb 1day':284,'9mobile corporate 10gb':291,'9mobile corporate 5gb':295,'9mobile awoof 1gb 1day':310,'9mobile gifting 200mb':321,'9mobile gifting 2.5gb':322,'9mobile gifting 35gb':323,'9mobile gifting 22gb':324,'9mobile awoof 2.5gb 1day':340,'9mobile awoof 1.5gb 7days':367,'9mobile corporate 40gb':458,'9mobile corporate 250mb':478,'9mobile awoof 1gb 30days':495,'9mobile awoof 2gb 30days':496,'airtel gifting 35gb':132,'airtel gifting 13gb':138,'airtel gifting 75gb':139,'airtel gifting 100gb':140,'airtel gifting 160gb':141,'airtel corporate 5gb':215};
+  Object.assign(table, extra);
   if(table[low]!==undefined) return table[low];
   // Generic fallback by size + network
   if(low.indexOf('500mb')>=0){ if(networkId===1) return 369; if(networkId===4) return 431; if(networkId===2) return 255; if(networkId===3) return 268; }
@@ -92,7 +95,7 @@ app.post('/api/buy', async (req,res)=>{
     const planId = mapPlan(planRaw, netId);
     const payload = {network:netId, mobile_number:phoneNum, plan:planId, Ported_number:'', request_id:newId()};
     const data = await callHusmo('/data/', payload);
-    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected - check Plan ID / balance',sent:payload,data}); }
+    if(!husmoOk(data)){ const hm = (data&&data.message)||(data&&data.data&&data.data.message)||(data&&data.data&&data.data.error)||JSON.stringify(data).slice(0,300); return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected: '+hm,sent:payload,data}); }
     res.json({ok:true,provider:'HUSMO',request_id:payload.request_id,sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -116,4 +119,73 @@ app.post('/api/verify-payment', async (req,res)=>{
     res.json({ok:paid,paid,amount:data?.data?.amount,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
+
+// --- Cable TV: POST /cablesub/ {cablename, smart_card_number, plan} ---
+function mapCablePlan(plan){
+  if(plan===undefined||plan===null) return plan;
+  var s=String(plan).trim();
+  if(/^\d+$/.test(s)) return parseInt(s,10);
+  var low=s.toLowerCase().replace(/\s+/g,' ').trim();
+  var c={'gotv max':2,'dstv yanga':6,'dstv compact':7,'dstv compact plus':8,'dstv premium':9,'classic':11,'basic':12,'smart':13,'nova':14,'super':15,'goeasy':16,'gostarter':17,'dstv confam':19,'dstv padi':20,'dstv asia':23,'dstv premium french':24,'dstv premium asia':25,'dstv compact + extra view':29,'dstv premium + extra view':30,'gotv smallie monthly':34,'gotv smallie quarterly':35,'gotv smallie yearly':36,'nova weekly':37,'basic weekly':38,'smart weekly':39,'classic weekly':40,'super weekly':41,'goselect':47,'gosports':51,'gotv smallie':34,'gotv jolli':47};
+  if(c[low]!==undefined) return c[low];
+  return s;
+}
+function mapCableName(name){
+  if(name===undefined||name===null) return 1;
+  var s=String(name).toLowerCase();
+  if(s.indexOf('gotv')>=0||s==='1') return 1;
+  if(s.indexOf('dstv')>=0||s.indexOf('dstv')>=0||s==='2') return 2;
+  if(s.indexOf('startime')>=0||s.indexOf('startimes')>=0||s==='3') return 3;
+  var n=parseInt(s,10); if(!isNaN(n)) return n; return 1;
+}
+app.post('/api/buy-cable', async (req,res)=>{
+  try{
+    const {cablename, cable, smart_card_number, iuc, plan, plan_id} = req.body||{};
+    const card = smart_card_number||iuc;
+    const planRaw = plan||plan_id;
+    if(!card||!planRaw) return res.status(400).json({ok:false,message:'smart_card_number and plan required'});
+    const cabId = mapCableName(cablename||cable);
+    const planId = mapCablePlan(planRaw);
+    const payload = {cablename:cabId, smart_card_number:card, plan:planId, request_id:newId()};
+    const data = await callHusmo('/cablesub/', payload);
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable',sent:payload,data});
+    res.json({ok:true,provider:'HUSMO',sent:payload,data});
+  }catch(e){res.status(500).json({ok:false,error:e.message});}
+});
+app.get('/api/validate-iuc', async (req,res)=>{
+  try{
+    const {smart_card_number, cablename} = req.query||{};
+    const data = await getHusmo(`/validateiuc?smart_card_number=${smart_card_number}&cablename=${mapCableName(cablename)}`);
+    res.json({ok:true,data});
+  }catch(e){res.status(500).json({ok:false,error:e.message});}
+});
+// --- Electricity / Bill: POST /billpayment/ {disconame, meternumber, mtype, amount} ---
+function mapDisco(d){
+  if(d===undefined||d===null) return d;
+  var s=String(d).trim().toLowerCase();
+  if(/^\d+$/.test(s)) return parseInt(s,10);
+  var m={'ikeja':1,'ikeja electric':1,'eko':2,'eko electric':2,'abuja':3,'abuja electric':3,'kano':4,'kano electric':4,'enugu':5,'enugu electric':5,'eedc':5,'port harcourt':6,'port harcourt electric':6,'ibadan':7,'ibadan electric':7,'kaduna':8,'kaduna electric':8,'jos':9,'jos electric':9,'benin':10,'benin electric':10,'yola':11,'yola electric':11,'aba':12,'aba electric':12};
+  if(m[s]!==undefined) return m[s];
+  return d;
+}
+app.post('/api/buy-bill', async (req,res)=>{
+  try{
+    const {disconame, disco, meternumber, meter, mtype, amount} = req.body||{};
+    const meterNum = meternumber||meter;
+    if(!meterNum||!amount) return res.status(400).json({ok:false,message:'meternumber and amount required'});
+    const payload = {disconame:mapDisco(disconame||disco), meternumber:meterNum, mtype:mtype||'prepaid', amount, request_id:newId()};
+    const data = await callHusmo('/billpayment/', payload);
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill',sent:payload,data});
+    res.json({ok:true,provider:'HUSMO',sent:payload,data});
+  }catch(e){res.status(500).json({ok:false,error:e.message});}
+});
+app.get('/api/validate-meter', async (req,res)=>{
+  try{
+    const {meternumber, disconame, mtype} = req.query||{};
+    const data = await getHusmo(`/validatemeter?meternumber=${meternumber}&disconame=${disconame}&mtype=${mtype||'prepaid'}`);
+    res.json({ok:true,data});
+  }catch(e){res.status(500).json({ok:false,error:e.message});}
+});
+
 app.listen(PORT,()=>console.log('DATATECH Husmo FINAL v3 on '+PORT));
+        
