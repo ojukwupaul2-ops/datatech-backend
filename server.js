@@ -69,9 +69,16 @@ async function getHusmo(path){
 function newId(){return 'DATATECH'+Date.now()+Math.floor(Math.random()*1000);}
 function husmoOk(d){
   if(!d) return false;
-  if(d.status==='success'||d.success===true||d.code==='000'||d.code===200) return true;
-  if(d.message && String(d.message).toLowerCase().indexOf('success')>=0) return true;
-  if(d.data && (d.data.status==='success'||d.data.success===true)) return true;
+  if(d.status==='success'||d.success===true||d.code==='000'||d.code===200||d.code==='201') return true;
+  var m=String(d.message||'').toLowerCase();
+  if(m.indexOf('success')>=0||m.indexOf('successful')>=0||m.indexOf('delivered')>=0) return true;
+  if(d.data){
+    if(d.data.status==='success'||d.data.success===true) return true;
+    var m2=String(d.data.message||'').toLowerCase();
+    if(m2.indexOf('success')>=0||m2.indexOf('delivered')>=0) return true;
+    if(d.data.transaction_id||d.data.reference||d.data.request_id) return true;
+  }
+  if(d.transaction_id||d.reference) return true;
   return false;
 }
 app.get('/',(req,res)=>res.json({ok:true,service:'DATATECH Backend - HUSMO FINAL v3 ALL NETWORKS',base:HUSMO_BASE,time:new Date().toISOString()}));
@@ -89,13 +96,13 @@ app.post('/api/buy', async (req,res)=>{
     const netId = mapNetwork(network);
     if(type==='airtime'){
       const a = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount});
-      if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime',data:a});
+      if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+JSON.stringify(data).slice(0,400),data:a});
       return res.json({ok:true,provider:'HUSMO',data:a});
     }
     const planId = mapPlan(planRaw, netId);
     const payload = {network:netId, mobile_number:phoneNum, plan:planId, Ported_number:false, request_id:newId()};
     const data = await callHusmo('/data/', payload);
-    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected - check Plan ID / balance',sent:payload,data}); }
+    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected: '+JSON.stringify(data).slice(0,600),sent:payload,data}); }
     res.json({ok:true,provider:'HUSMO',request_id:payload.request_id,sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -106,7 +113,7 @@ app.post('/api/buy-airtime', async (req,res)=>{
     if(!phoneNum||!amount) return res.status(400).json({ok:false,message:'mobile_number and amount required'});
     const netId = mapNetwork(network);
     const data = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount});
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime',data});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+JSON.stringify(data).slice(0,400),data});
     res.json({ok:true,provider:'HUSMO',data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -148,7 +155,7 @@ app.post('/api/buy-cable', async (req,res)=>{
     const planId = mapCablePlan(planRaw);
     const payload = {cablename:cabId, smart_card_number:card, plan:planId, request_id:newId()};
     const data = await callHusmo('/cablesub/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable',sent:payload,data});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable: '+JSON.stringify(data).slice(0,400),sent:payload,data});
     res.json({ok:true,provider:'HUSMO',sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -175,7 +182,7 @@ app.post('/api/buy-bill', async (req,res)=>{
     if(!meterNum||!amount) return res.status(400).json({ok:false,message:'meternumber and amount required'});
     const payload = {disconame:mapDisco(disconame||disco), meternumber:meterNum, mtype:mtype||'prepaid', amount, request_id:newId()};
     const data = await callHusmo('/billpayment/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill',sent:payload,data});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill: '+JSON.stringify(data).slice(0,400),sent:payload,data});
     res.json({ok:true,provider:'HUSMO',sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -188,3 +195,4 @@ app.get('/api/validate-meter', async (req,res)=>{
 });
 
 app.listen(PORT,()=>console.log('DATATECH Husmo FINAL v3 on '+PORT));
+  
