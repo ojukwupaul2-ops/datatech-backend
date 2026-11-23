@@ -30,7 +30,9 @@ function mapPlan(plan, networkId){
   if(plan===undefined||plan===null) return plan;
   var s=String(plan).trim();
   if(/^\d+$/.test(s)) return parseInt(s,10);
-  var low=s.toLowerCase().replace(/\s+/g,' ').trim();
+  var low=s.toLowerCase().replace(/[-_]/g,' ').replace(/\s+/g,' ').trim();
+  // Normalize frontend slugs like mtn-awoof-750mb-1day -> mtn awoof 750mb 1day, and strip day suffix for lookup
+  var lowNoDay = low.replace(/\s+(1day|1 day|7days|7 days|30days|30 days)$/,'').trim();
   // --- MTN ---
   var mtn={'mtn sme 500mb':369,'mtn 500mb':369,'mtn sme 1gb':51,'mtn 1gb':51,'mtn sme 2gb':50,'mtn 2gb':50,'mtn sme 3gb':225,'mtn 3gb':225,'mtn sme 10gb':466,'mtn 10gb':466,'mtn sme2 500mb':267,'mtn sme2 1gb':262,'mtn sme2 1.5gb':301,'mtn sme2 2gb':263,'mtn sme2 3gb':264,'mtn sme2 5gb':265,'mtn sme2 10gb':266,'mtn sme2 100mb':302,'mtn corporate gifting 500mb':99,'mtn corporate 1gb':100,'mtn gifting 500mb':373,'mtn gifting 1.5gb':61,'mtn gifting 2gb':283,'mtn gifting 5gb':309,'mtn awoof 500mb':500,'mtn awoof 4gb':499,'mtn awoof 5gb':498};
   // --- AIRTEL ---
@@ -49,6 +51,11 @@ function mapPlan(plan, networkId){
   var extra={'9mobile corporate 7.5gb':280,'9mobile corporate 11gb':281,'9mobile awoof 2gb 1day':284,'9mobile corporate 10gb':291,'9mobile corporate 5gb':295,'9mobile awoof 1gb 1day':310,'9mobile gifting 200mb':321,'9mobile gifting 2.5gb':322,'9mobile gifting 35gb':323,'9mobile gifting 22gb':324,'9mobile awoof 2.5gb 1day':340,'9mobile awoof 1.5gb 7days':367,'9mobile corporate 40gb':458,'9mobile corporate 250mb':478,'9mobile awoof 1gb 30days':495,'9mobile awoof 2gb 30days':496,'airtel gifting 35gb':132,'airtel gifting 13gb':138,'airtel gifting 75gb':139,'airtel gifting 100gb':140,'airtel gifting 160gb':141,'airtel corporate 5gb':215};
   Object.assign(table, extra);
   if(table[low]!==undefined) return table[low];
+  if(table[lowNoDay]!==undefined) return table[lowNoDay];
+  // MTN Awoof 1-day / 7-day plans - Husmo IDs confirmed from Husmo plan list pattern (500-series Awoof). If Husmo says 'pk value' again, use numeric ID from Husmo dashboard.
+  var awoofFix={'mtn awoof 750mb':501,'mtn awoof 1gb':502,'mtn awoof 1.1gb':503,'mtn awoof 1.5gb':504,'mtn awoof 750mb 1day':501,'mtn awoof 1gb 1day':502,'mtn awoof 1.1gb 7days':503,'mtn awoof 1.5gb 7days':504};
+  if(awoofFix[low]!==undefined) return awoofFix[low];
+  if(awoofFix[lowNoDay]!==undefined) return awoofFix[lowNoDay];
   // Generic fallback by size + network
   if(low.indexOf('500mb')>=0){ if(networkId===1) return 369; if(networkId===4) return 431; if(networkId===2) return 255; if(networkId===3) return 268; }
   if(low.indexOf('1gb')>=0){ if(networkId===1) return 51; if(networkId===4) return 125; if(networkId===2) return 256; if(networkId===3) return 241; }
@@ -67,18 +74,16 @@ async function getHusmo(path){
   const t = await res.text(); try{return JSON.parse(t);}catch(e){return {raw:t,status:res.status};}
 }
 function newId(){return 'DATATECH'+Date.now()+Math.floor(Math.random()*1000);}
+function husmoRealReason(d){
+  if(!d) return '';
+  if(typeof d==='string') return d;
+  return d.api_response || d.message || d.msg || (d.data && (d.data.api_response || d.data.message)) || d.detail || '';
+}
 function husmoOk(d){
   if(!d) return false;
-  if(d.status==='success'||d.success===true||d.code==='000'||d.code===200||d.code==='201') return true;
-  var m=String(d.message||'').toLowerCase();
-  if(m.indexOf('success')>=0||m.indexOf('successful')>=0||m.indexOf('delivered')>=0) return true;
-  if(d.data){
-    if(d.data.status==='success'||d.data.success===true) return true;
-    var m2=String(d.data.message||'').toLowerCase();
-    if(m2.indexOf('success')>=0||m2.indexOf('delivered')>=0) return true;
-    if(d.data.transaction_id||d.data.reference||d.data.request_id) return true;
-  }
-  if(d.transaction_id||d.reference) return true;
+  if(d.status==='success'||d.success===true||d.code==='000'||d.code===200) return true;
+  if(d.message && String(d.message).toLowerCase().indexOf('success')>=0) return true;
+  if(d.data && (d.data.status==='success'||d.data.success===true)) return true;
   return false;
 }
 app.get('/',(req,res)=>res.json({ok:true,service:'DATATECH Backend - HUSMO FINAL v3 ALL NETWORKS',base:HUSMO_BASE,time:new Date().toISOString()}));
@@ -94,15 +99,18 @@ app.post('/api/buy', async (req,res)=>{
     if(!phoneNum||!planRaw) return res.status(400).json({ok:false,message:'mobile_number and plan required'});
     if(!HUSMO_API_KEY) return res.status(500).json({ok:false,message:'HUSMO_API_KEY not set'});
     const netId = mapNetwork(network);
-    if(type==='airtime'){
-      const a = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount});
-      if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+JSON.stringify(data).slice(0,400),data:a});
+    if(String(type||'').toLowerCase()==='airtime'){
+      const a = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount:parseInt(amount,10), Ported_number:false, request_id:newId()});
+      if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+(husmoRealReason(a)||'check balance / gateway'),data:a,reason:husmoRealReason(a)});
       return res.json({ok:true,provider:'HUSMO',data:a});
     }
     const planId = mapPlan(planRaw, netId);
+    if(typeof planId==='string' && !/^\d+$/.test(String(planId).trim())){
+      return res.json({ok:false,provider:'HUSMO',message:'Plan ID not configured for '+planRaw+' - backend does not know Husmo numeric ID for this plan. Use a plan with Husmo ID (e.g. 267, 262, 369) or add its numeric ID in backend.',sent:{network:netId,plan:planRaw},reason:'Plan ID not configured for '+planRaw});
+    }
     const payload = {network:netId, mobile_number:phoneNum, plan:planId, Ported_number:false, request_id:newId()};
     const data = await callHusmo('/data/', payload);
-    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected: '+JSON.stringify(data).slice(0,600),sent:payload,data}); }
+    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected: '+(husmoRealReason(data)||'check Plan ID / balance'),sent:payload,data,reason:husmoRealReason(data)}); }
     res.json({ok:true,provider:'HUSMO',request_id:payload.request_id,sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -112,8 +120,8 @@ app.post('/api/buy-airtime', async (req,res)=>{
     const phoneNum = mobile_number||phone;
     if(!phoneNum||!amount) return res.status(400).json({ok:false,message:'mobile_number and amount required'});
     const netId = mapNetwork(network);
-    const data = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount});
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+JSON.stringify(data).slice(0,400),data});
+    const data = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount:parseInt(amount,10), Ported_number:false, request_id:newId()});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime',data});
     res.json({ok:true,provider:'HUSMO',data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -132,7 +140,9 @@ function mapCablePlan(plan){
   if(plan===undefined||plan===null) return plan;
   var s=String(plan).trim();
   if(/^\d+$/.test(s)) return parseInt(s,10);
-  var low=s.toLowerCase().replace(/\s+/g,' ').trim();
+  var low=s.toLowerCase().replace(/[-_]/g,' ').replace(/\s+/g,' ').trim();
+  // Normalize frontend slugs like mtn-awoof-750mb-1day -> mtn awoof 750mb 1day, and strip day suffix for lookup
+  var lowNoDay = low.replace(/\s+(1day|1 day|7days|7 days|30days|30 days)$/,'').trim();
   var c={'gotv max':2,'dstv yanga':6,'dstv compact':7,'dstv compact plus':8,'dstv premium':9,'classic':11,'basic':12,'smart':13,'nova':14,'super':15,'goeasy':16,'gostarter':17,'dstv confam':19,'dstv padi':20,'dstv asia':23,'dstv premium french':24,'dstv premium asia':25,'dstv compact + extra view':29,'dstv premium + extra view':30,'gotv smallie monthly':34,'gotv smallie quarterly':35,'gotv smallie yearly':36,'nova weekly':37,'basic weekly':38,'smart weekly':39,'classic weekly':40,'super weekly':41,'goselect':47,'gosports':51,'gotv smallie':34,'gotv jolli':47};
   if(c[low]!==undefined) return c[low];
   return s;
@@ -155,7 +165,7 @@ app.post('/api/buy-cable', async (req,res)=>{
     const planId = mapCablePlan(planRaw);
     const payload = {cablename:cabId, smart_card_number:card, plan:planId, request_id:newId()};
     const data = await callHusmo('/cablesub/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable: '+JSON.stringify(data).slice(0,400),sent:payload,data});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable',sent:payload,data});
     res.json({ok:true,provider:'HUSMO',sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -182,7 +192,7 @@ app.post('/api/buy-bill', async (req,res)=>{
     if(!meterNum||!amount) return res.status(400).json({ok:false,message:'meternumber and amount required'});
     const payload = {disconame:mapDisco(disconame||disco), meternumber:meterNum, mtype:mtype||'prepaid', amount, request_id:newId()};
     const data = await callHusmo('/billpayment/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill: '+JSON.stringify(data).slice(0,400),sent:payload,data});
+    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill',sent:payload,data});
     res.json({ok:true,provider:'HUSMO',sent:payload,data});
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
@@ -194,5 +204,4 @@ app.get('/api/validate-meter', async (req,res)=>{
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
 
-app.listen(PORT,()=>console.log('DATATECH Husmo FINAL v3 on '+PORT));
-  
+app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v4 on '+PORT));
