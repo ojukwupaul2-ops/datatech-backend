@@ -1,4 +1,5 @@
-// DATATECH BACKEND - HUSMO VERSION - NO CORS PACKAGE
+// DATATECH BACKEND - HUSMO VERSION - NO CORS + TRIM FIX
+// .trim() removes Enter/space if you copy token with long-press
 // This version does NOT need 'cors' in package.json
 // It handles CORS manually, so old package.json (express only) will work
 
@@ -15,8 +16,8 @@ app.use((req, res, next) => {
   next();
 });
 
-const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET || '';
-const HUSMO_API_KEY = process.env.HUSMO_API_KEY || '';
+const PAYSTACK_SECRET = (process.env.PAYSTACK_SECRET || '').trim();
+const HUSMO_API_KEY = (process.env.HUSMO_API_KEY || '').trim();
 const HUSMO_BASE = process.env.HUSMO_BASE || 'https://api.husmo.com/api';
 const PORT = process.env.PORT || 3000;
 
