@@ -77,13 +77,18 @@ function newId(){return 'DATATECH'+Date.now()+Math.floor(Math.random()*1000);}
 function husmoRealReason(d){
   if(!d) return '';
   if(typeof d==='string') return d;
-  return d.api_response || d.message || d.msg || (d.data && (d.data.api_response || d.data.message)) || d.detail || '';
+  var r = d.api_response || d.message || d.msg || d.error || d.detail || d.response || (d.data && (d.data.api_response || d.data.message || d.data.msg || d.data.error || d.data.detail));
+  if(r) return String(r);
+  // No known field - show full Husmo reply so we can see real reason (cut to 300 chars)
+  try{ return JSON.stringify(d).slice(0,300); }catch(e){ return ''; }
 }
 function husmoOk(d){
   if(!d) return false;
-  if(d.status==='success'||d.success===true||d.code==='000'||d.code===200) return true;
-  if(d.message && String(d.message).toLowerCase().indexOf('success')>=0) return true;
-  if(d.data && (d.data.status==='success'||d.data.success===true)) return true;
+  if(d.status==='success'||d.Status==='success'||d.success===true||d.Success===true||d.code==='000'||d.code===200||d.status_code===200||d.Status==='successful') return true;
+  var m = d.message||d.msg||d.api_response||'';
+  if(m && String(m).toLowerCase().indexOf('success')>=0) return true;
+  if(d.data && (d.data.status==='success'||d.data.Status==='success'||d.data.success===true)) return true;
+  if(d.api_response && String(d.api_response).toLowerCase().indexOf('success')>=0) return true;
   return false;
 }
 app.get('/',(req,res)=>res.json({ok:true,service:'DATATECH Backend - HUSMO FINAL v3 ALL NETWORKS',base:HUSMO_BASE,time:new Date().toISOString()}));
@@ -208,5 +213,5 @@ app.get('/api/validate-meter', async (req,res)=>{
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
 
-app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v5 on '+PORT));
+app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v6 on '+PORT));
                     
