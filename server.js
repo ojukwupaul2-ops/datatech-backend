@@ -96,14 +96,18 @@ app.post('/api/buy', async (req,res)=>{
   try{
     const {network, phone, mobile_number, plan, plan_id, amount, type} = req.body||{};
     const phoneNum = mobile_number||phone; const planRaw = plan||plan_id;
-    if(!phoneNum||!planRaw) return res.status(400).json({ok:false,message:'mobile_number and plan required'});
     if(!HUSMO_API_KEY) return res.status(500).json({ok:false,message:'HUSMO_API_KEY not set'});
     const netId = mapNetwork(network);
+    // AIRTIME FIRST - airtime has NO plan, only phone + amount. Do NOT require plan for airtime.
     if(String(type||'').toLowerCase()==='airtime'){
+      if(!phoneNum||!amount) return res.status(400).json({ok:false,message:'mobile_number and amount required for airtime'});
+
       const a = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount:parseInt(amount,10), Ported_number:false, request_id:newId()});
       if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+(husmoRealReason(a)||'check balance / gateway'),data:a,reason:husmoRealReason(a)});
       return res.json({ok:true,provider:'HUSMO',data:a});
     }
+    // DATA ONLY - now require plan
+    if(!phoneNum||!planRaw) return res.status(400).json({ok:false,message:'mobile_number and plan required'});
     const planId = mapPlan(planRaw, netId);
     if(typeof planId==='string' && !/^\d+$/.test(String(planId).trim())){
       return res.json({ok:false,provider:'HUSMO',message:'Plan ID not configured for '+planRaw+' - backend does not know Husmo numeric ID for this plan. Use a plan with Husmo ID (e.g. 267, 262, 369) or add its numeric ID in backend.',sent:{network:netId,plan:planRaw},reason:'Plan ID not configured for '+planRaw});
@@ -204,4 +208,5 @@ app.get('/api/validate-meter', async (req,res)=>{
   }catch(e){res.status(500).json({ok:false,error:e.message});}
 });
 
-app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v4 on '+PORT));
+app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v5 on '+PORT));
+                    
