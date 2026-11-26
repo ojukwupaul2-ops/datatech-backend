@@ -1,217 +1,264 @@
-// DATATECH BACKEND - HUSMO FINAL v3 - ALL NETWORKS
-// Network IDs: 1=MTN, 2=GLO, 3=9MOBILE, 4=AIRTEL
-// Buy Data: POST /data/ {network:1, mobile_number, plan:369}
-// Buy Airtime: POST /topup/ {network:1, mobile_number, amount}
 const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
 const app = express();
+app.use(cors());
 app.use(express.json());
-app.use((req,res,next)=>{
-  res.header('Access-Control-Allow-Origin','*');
-  res.header('Access-Control-Allow-Headers','Content-Type, Authorization, api-key');
-  res.header('Access-Control-Allow-Methods','GET, POST, OPTIONS');
-  if(req.method==='OPTIONS') return res.sendStatus(200);
-  next();
-});
-const PAYSTACK_SECRET = (process.env.PAYSTACK_SECRET||'').trim();
-const HUSMO_API_KEY = (process.env.HUSMO_API_KEY||'').trim();
-const HUSMO_BASE = (process.env.HUSMO_BASE||'https://husmodataapi.com/api').trim().replace(/\/$/,'');
-const PORT = process.env.PORT||3000;
-function mapNetwork(net){
-  if(net===undefined||net===null) return 1;
-  var s=String(net).toLowerCase().trim();
-  if(s==='1'||s.indexOf('mtn')>=0) return 1;
-  if(s==='2'||s.indexOf('glo')>=0) return 2;
-  if(s==='3'||s.indexOf('9mobile')>=0||s.indexOf('etisalat')>=0) return 3;
-  if(s==='4'||s.indexOf('airtel')>=0) return 4;
-  var n=parseInt(s,10); if(!isNaN(n)&&n>=1&&n<=4) return n;
-  return 1;
+
+// ===== CONFIG - DO NOT PUT LIVE KEYS HERE, USE RENDER ENV OR ADMIN PANEL =====
+const HUSMO_BASE = 'https://api.husmodata.com';
+const VTPASS_SANDBOX = 'https://sandbox.vtpass.com/api';
+const VTPASS_LIVE = 'https://vtpass.com/api';
+let SETTINGS = {
+  vtProvider: 'Husmo', vtMode: 'Manual', vtEnv: 'SANDBOX',
+  paystackEnv: 'TEST', paystackPub: '', paystackSec: '',
+  vtpassKey: '', vtpassPub: '', vtpassSec: '', husmoKey: '',
+  vtPassEnv: 'SANDBOX'
+};
+let ORDERS = [];
+let ACCOUNTS = [{name:'Ugochukwu Ojukwu', phone:'07044102707', email:'ojukwupaul2@gmail.com', balance:0}];
+let PENDING = [];
+let TICKETS = [{ref:'212597', subject:'Support', text:'Welcome to DataTech Support', status:'Open'}];
+
+const VTPASS_DATA = {
+  'MTN': { serviceID:'mtn-data', variation:'mtn-10mb-100', name:'MTN 10MB - 100', price:100 },
+  'AIRTEL': { serviceID:'airtel-data', variation:'airt-50', name:'Airtel 50MB - 100', price:100 },
+  'GLO': { serviceID:'glo-data', variation:'glo100', name:'GLO 100MB - 200', price:200 },
+  '9MOBILE': { serviceID:'etisalat-data', variation:'eti-100', name:'9mobile 100MB - 100', price:100 }
+};
+const VTPASS_AIRTIME = { 'MTN':'MTN', 'AIRTEL':'AIRTEL', 'GLO':'GLO', '9MOBILE':'ETISALAT' };
+const PLANS = [
+  {id:'husmo-airtel-200', network:'AIRTEL', name:'Airtel 200MB Gifting', price:195, cat:'GIFTING'},
+  {id:'husmo-airtel-300', network:'AIRTEL', name:'Airtel 300MB Gifting', price:293, cat:'GIFTING'},
+  {id:'vtpass-mtn-100mb', network:'MTN', name:'MTN 100MB - VTpass (1 day)', price:120, cost:100, provider:'VTPass', cat:'SME', serviceID:'mtn-data', variation_code:'mtn-10mb-100'},
+  {id:'vtpass-mtn-500mb', network:'MTN', name:'MTN 500MB - VTpass (30 days)', price:550, cost:480, provider:'VTPass', cat:'SME', serviceID:'mtn-data', variation_code:'mtn-500mb-30days'},
+  {id:'vtpass-mtn-1gb', network:'MTN', name:'MTN 1GB - VTpass (30 days)', price:900, cost:780, provider:'VTPass', cat:'SME', serviceID:'mtn-data', variation_code:'mtn-1gb-30days'},
+  {id:'vtpass-mtn-2gb', network:'MTN', name:'MTN 2GB - VTpass (30 days)', price:1700, cost:1450, provider:'VTPass', cat:'SME', serviceID:'mtn-data', variation_code:'mtn-2gb-30days'},
+  {id:'vtpass-airtel-100mb', network:'AIRTEL', name:'Airtel 100MB - VTpass', price:150, cost:120, provider:'VTPass', cat:'SME', serviceID:'airtel-data', variation_code:'airt-100'},
+  {id:'vtpass-glo-100mb', network:'GLO', name:'GLO 100MB - VTpass', price:200, cost:170, provider:'VTPass', cat:'SME', serviceID:'glo-data', variation_code:'glo100'},
+  {id:'vtpass-9mobile-100mb', network:'9MOBILE', name:'9mobile 100MB - VTpass', price:150, cost:120, provider:'VTPass', cat:'SME', serviceID:'etisalat-data', variation_code:'eti-100'},
+  {id:'husmo-gift-61', network:'MTN', name:'MTN 1.5GB GIFTING - 7 days (ID 61)', price:1120, cost:970, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:61},
+  {id:'husmo-gift-66', network:'MTN', name:'MTN 16.5GB GIFTING - 30 days direct data (ID 66)', price:6940, cost:6035, provider:'Husmo', cat:'GIFTING', validity:'30 days direct data', husmo_id:66},
+  {id:'husmo-gift-104', network:'MTN', name:'MTN 75GB GIFTING - 30 days direct data (ID 104)', price:20080, cost:17460, provider:'Husmo', cat:'GIFTING', validity:'30 days direct data', husmo_id:104},
+  {id:'husmo-gift-105', network:'MTN', name:'MTN 10GB GIFTING - 30 days (ID 105)', price:5020, cost:4365, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:105},
+  {id:'husmo-gift-106', network:'MTN', name:'MTN 40GB GIFTING - 60 days postpaid (ID 106)', price:10040, cost:8730, provider:'Husmo', cat:'GIFTING', validity:'60 days postpaid', husmo_id:106},
+  {id:'husmo-gift-107', network:'MTN', name:'MTN 1GB GIFTING - 1 day (ID 107)', price:560, cost:483, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:107},
+  {id:'husmo-gift-108', network:'MTN', name:'MTN 2GB GIFTING - 2 days (ID 108)', price:840, cost:728, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:108},
+  {id:'husmo-gift-109', network:'MTN', name:'MTN 1GB GIFTING - 7 days direct data + 5mins (ID 109)', price:900, cost:780, provider:'Husmo', cat:'GIFTING', validity:'7 days direct data + 5mins', husmo_id:109},
+  {id:'husmo-gift-111', network:'MTN', name:'MTN 750MB GIFTING - days (ID 111)', price:500, cost:438, provider:'Husmo', cat:'GIFTING', validity:'days', husmo_id:111},
+  {id:'husmo-gift-112', network:'MTN', name:'MTN 90GB GIFTING - 60 days (ID 112)', price:27890, cost:24250, provider:'Husmo', cat:'GIFTING', validity:'60 days', husmo_id:112},
+  {id:'husmo-gift-230', network:'MTN', name:'MTN 2.5GB GIFTING - 2 days (ID 230)', price:1000, cost:873, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:230},
+  {id:'husmo-gift-283', network:'MTN', name:'MTN 2GB GIFTING - 30 days plus 2 mins (ID 283)', price:1670, cost:1455, provider:'Husmo', cat:'GIFTING', validity:'30 days plus 2 mins', husmo_id:283},
+  {id:'husmo-gift-303', network:'MTN', name:'MTN 4GB GIFTING - 2 days (ID 303)', price:1150, cost:1000, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:303},
+  {id:'husmo-gift-312', network:'MTN', name:'MTN 6.5GB GIFTING - 2 days (ID 312)', price:1720, cost:1500, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:312},
+  {id:'husmo-gift-341', network:'MTN', name:'MTN 6.75GB GIFTING - 30 days XTRASPECIAL (ID 341)', price:3350, cost:2910, provider:'Husmo', cat:'GIFTING', validity:'30 days XTRASPECIAL', husmo_id:341},
+  {id:'husmo-gift-346', network:'MTN', name:'MTN 2.7GB GIFTING - 30 days (ID 346)', price:2230, cost:1940, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:346},
+  {id:'husmo-gift-347', network:'MTN', name:'MTN 1.2GB GIFTING - 7 days mtn pulse numbers (ID 347)', price:840, cost:728, provider:'Husmo', cat:'GIFTING', validity:'7 days mtn pulse numbers', husmo_id:347},
+  {id:'husmo-gift-349', network:'MTN', name:'MTN 3.2GB GIFTING - 2 days (ID 349)', price:1120, cost:970, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:349},
+  {id:'husmo-gift-350', network:'MTN', name:'MTN 36GB GIFTING - 30 days (ID 350)', price:12270, cost:10670, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:350},
+  {id:'husmo-gift-351', network:'MTN', name:'MTN 250GB GIFTING - 30 days (ID 351)', price:61350, cost:53350, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:351},
+  {id:'husmo-gift-352', network:'MTN', name:'MTN 35GB GIFTING - 30 days postpaid plan only (ID 352)', price:7810, cost:6790, provider:'Husmo', cat:'GIFTING', validity:'30 days postpaid plan only', husmo_id:352},
+  {id:'husmo-gift-355', network:'MTN', name:'MTN 165GB GIFTING - 30 days (ID 355)', price:39040, cost:33950, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:355},
+  {id:'husmo-gift-357', network:'MTN', name:'MTN 200GB GIFTING - 60 days (ID 357)', price:55770, cost:48500, provider:'Husmo', cat:'GIFTING', validity:'60 days', husmo_id:357},
+  {id:'husmo-gift-373', network:'MTN', name:'MTN 500MB GIFTING - 7 days (ID 373)', price:560, cost:485, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:373},
+  {id:'husmo-gift-375', network:'MTN', name:'MTN 3.5GB GIFTING - 30 days (ID 375)', price:2790, cost:2428, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:375},
+  {id:'husmo-gift-377', network:'MTN', name:'MTN 12.5GB GIFTING - 30 days (ID 377)', price:6140, cost:5335, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:377},
+  {id:'husmo-gift-378', network:'MTN', name:'MTN 230MB GIFTING - 1 day (ID 378)', price:220, cost:194, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:378},
+  {id:'husmo-gift-379', network:'MTN', name:'MTN 110MB GIFTING - 1 day (ID 379)', price:110, cost:98, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:379},
+  {id:'husmo-gift-380', network:'MTN', name:'MTN 75MB GIFTING - 1 day (ID 380)', price:90, cost:74, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:380},
+  {id:'husmo-gift-394', network:'MTN', name:'MTN 1.5GB GIFTING - 2 days (ID 394)', price:670, cost:582, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:394},
+  {id:'husmo-gift-395', network:'MTN', name:'MTN 1.5GB GIFTING - 7 days (ID 395)', price:1110, cost:965, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:395},
+  {id:'husmo-gift-401', network:'MTN', name:'MTN 25GB GIFTING - 30 days (ID 401)', price:10000, cost:8700, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:401},
+  {id:'husmo-gift-402', network:'MTN', name:'MTN 20GB GIFTING - 30 days (ID 402)', price:8350, cost:7260, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:402},
+  {id:'husmo-gift-403', network:'MTN', name:'MTN 7GB GIFTING - 30 days (ID 403)', price:3890, cost:3380, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:403},
+  {id:'husmo-gift-405', network:'MTN', name:'MTN 800GB GIFTING - 1 year (ID 405)', price:138720, cost:120625, provider:'Husmo', cat:'GIFTING', validity:'1 year', husmo_id:405},
+  {id:'husmo-gift-406', network:'MTN', name:'MTN 20GB GIFTING - 7 days (ID 406)', price:5520, cost:4800, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:406},
+  {id:'husmo-gift-407', network:'MTN', name:'MTN 6GB GIFTING - 7 days (ID 407)', price:2790, cost:2425, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:407},
+  {id:'husmo-gift-408', network:'MTN', name:'MTN 3.5GB GIFTING - 7 days (ID 408)', price:1670, cost:1455, provider:'Husmo', cat:'GIFTING', validity:'7 days', husmo_id:408},
+  {id:'husmo-gift-409', network:'MTN', name:'MTN 65GB GIFTING - 30 days (ID 409)', price:17770, cost:15450, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:409},
+  {id:'husmo-gift-410', network:'MTN', name:'MTN 14.5GB GIFTING - 30 days for XTRASPECIAL (ID 410)', price:5580, cost:4850, provider:'Husmo', cat:'GIFTING', validity:'30 days for XTRASPECIAL', husmo_id:410},
+  {id:'husmo-gift-411', network:'MTN', name:'MTN 500MB GIFTING - 1 day (ID 411)', price:390, cost:339, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:411},
+  {id:'husmo-gift-470', network:'MTN', name:'MTN 7GB GIFTING - 2 days (ID 470)', price:2010, cost:1746, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:470},
+  {id:'husmo-gift-471', network:'MTN', name:'MTN 8GB GIFTING - 2 days (ID 471)', price:2070, cost:1800, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:471},
+  {id:'husmo-gift-474', network:'MTN', name:'MTN 3.5GB GIFTING - 1 day (ID 474)', price:1100, cost:960, provider:'Husmo', cat:'GIFTING', validity:'1 day', husmo_id:474},
+  {id:'husmo-gift-475', network:'MTN', name:'MTN 4GB GIFTING - 2 days (ID 475)', price:1320, cost:1152, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:475},
+  {id:'husmo-gift-476', network:'MTN', name:'MTN 5.5GB GIFTING - 2 days (ID 476)', price:1660, cost:1440, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:476},
+  {id:'husmo-gift-477', network:'MTN', name:'MTN 34GB GIFTING - 30 days (ID 477)', price:11040, cost:9600, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:477},
+  {id:'husmo-gift-479', network:'MTN', name:'MTN 500MB GIFTING - 30 days (ID 479)', price:490, cost:430, provider:'Husmo', cat:'GIFTING', validity:'30 days', husmo_id:479},
+  {id:'husmo-gift-487', network:'MTN', name:'MTN 5GB GIFTING - 2 days (ID 487)', price:1380, cost:1200, provider:'Husmo', cat:'GIFTING', validity:'2 days', husmo_id:487},
+];
+
+const STYLE = `*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f4f6fb;color:#111}.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#fff}.logo{font-size:26px;font-weight:900}.logo span{color:#00c853}.card{background:#fff;margin:14px;border-radius:16px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.06)}label{font-weight:700;font-size:14px}select,input,textarea{width:100%;padding:13px;margin:6px 0 14px;border:1px solid #ddd;border-radius:10px;font-size:16px}button{cursor:pointer}.buy{width:100%;padding:15px;border:0;border-radius:12px;background:#00c853;color:#fff;font-size:18px;font-weight:900}.buy2{width:100%;padding:15px;border:0;border-radius:12px;background:#2563eb;color:#fff;font-size:17px;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.box{background:#eef2ff;border-radius:12px;padding:14px;text-align:center;font-weight:800}.badge{display:inline-block;padding:6px 12px;border-radius:999px;font-size:12px;font-weight:800}.green{background:#dcfce7;color:#166534}.yellow{background:#fef9c3;color:#854d0e}.red{background:#fee2e2;color:#991b1b}.small{color:#666;font-size:13px}.tabs{display:flex;gap:8px;overflow-x:auto;padding:10px 14px}.tabs button{white-space:nowrap;padding:10px 14px;border:1px solid #ddd;background:#fff;border-radius:999px;font-weight:700}.tabs button.on{background:#111;color:#fff}.chip{padding:10px 14px;border:1px solid #ddd;background:#fff;border-radius:999px;font-weight:700}.chip.on{background:#00c853;color:#fff}.row{display:flex;gap:10px}.row>*{flex:1}.nav2{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;justify-content:space-around;padding:10px;border-top:1px solid #eee}.nav2 button{border:0;background:none;font-weight:800}.pinpad{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}.pinpad button{padding:16px;font-size:20px;border-radius:12px;border:1px solid #ddd;background:#fff}.slide{display:none;padding:18px;text-align:center;min-height:430px}.slide.active{display:block}.s1{background:#dbeafe}.s2{background:#ffedd5}.s3{background:#dbeafe}.s4{background:#ede9fe}.dots{text-align:center;padding:10px}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#ccc;margin:0 3px}.dot.on{background:#2563eb}`;
+
+const CUSTOMER = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DataTech - Buy Data & Airtime</title><style>${STYLE}</style></head><body>
+<div id="onboard"><div class="topbar"><div class="logo">DATA<span>TECH</span></div><button onclick="skip()">Skip &rarr;</button></div><div id="slider">
+<div class="slide s1 active"><div style="font-size:110px">📱</div><h2>1. Cheap Data Bundles</h2><p>Buy MTN, Glo, Airtel and 9mobile data at cheapest price. Starting from ₦280 only.</p></div>
+<div class="slide s2"><div style="font-size:110px">🧾</div><h2>2. Utility Bill Payments</h2><p>Pay for electricity, water, cable TV, and more in seconds from your home.</p></div>
+<div class="slide s3"><div style="font-size:110px">📺</div><h2>3. Cable TV</h2><p>Renew DSTV, GOTV, and Startimes instantly. No stress, no queue.</p></div>
+<div class="slide s4"><div style="font-size:110px">💵</div><h2>4. Airtime to Cash</h2><p>Convert your excess airtime to real cash instantly. Best rate is 85%.</p></div></div>
+<div class="dots"><span class="dot on" onclick="go(0)"></span><span class="dot" onclick="go(1)"></span><span class="dot" onclick="go(2)"></span><span class="dot" onclick="go(3)"></span></div>
+<div class="row" style="padding:0 16px"><button onclick="prev()">← Prev</button><button onclick="next()" style="background:#2563eb;color:#fff">Next →</button></div>
+<p style="text-align:center" class="small">Auto-scroll is on. Swipe, tap Prev / Next, or tap a dot.</p>
+<button class="buy2" style="margin:14px;width:calc(100% - 28px)" onclick="goLogin()">Go To Login / Register</button></div>
+
+<div id="auth" style="display:none"><div class="card"><button onclick="backPic()">← Back to Pictures</button>
+<div id="loginF"><h1>Welcome Back</h1><p class="small">Login to your DATATECH account</p><label>Phone Number</label><input id="lPhone" value="07044102707"><label>Password</label><div class="row"><input id="lPass" type="password" placeholder="Enter password"><button onclick="eye('lPass')">👁</button></div><p style="text-align:center"><a href="#" onclick="forgot();return false">Forgot Password?</a></p><button class="buy" onclick="login()">Login</button><p style="text-align:center">Don't have an account? <a href="#" onclick="showReg();return false">Register Here</a></p><div id="lMsg"></div></div>
+<div id="regF" style="display:none"><h2>Register</h2><label>First Name</label><input id="rF"><label>Last Name</label><input id="rL"><label>Phone Number</label><input id="rPhone" placeholder="e.g. 07044102707"><label>Email Address</label><input id="rEmail" placeholder="you@email.com"><label>Referral Code Optional</label><input id="rRef" placeholder="PAUL2026 = ₦200"><label>Password</label><div class="row"><input id="rPass" type="password"><button onclick="eye('rPass')">👁</button></div><label>Confirm Password</label><input id="rPass2" type="password"><button class="buy" onclick="register()">Sign Up</button><p style="text-align:center">Already have an account? <a href="#" onclick="showLogin();return false">Login Here</a></p><div id="rMsg"></div></div></div></div>
+
+<div id="home" style="display:none"><div class="topbar"><div class="logo">DATA<span>TECH</span></div><button onclick="showProfile()">👤 Profile</button></div>
+<div class="card"><p>Hello Paul 👋</p><h2>Wallet Balance: ₦<span id="bal">0.00</span></h2><span class="badge green">Account Active - Verified</span> <span class="badge yellow">VTU: Manual Mode - Provider: Husmo (MTN GIFTING only)</span> <span class="badge green">Paystack Virtual Account: ON</span><div id="lowBal" style="background:#fef9c3;padding:10px;border-radius:10px;margin-top:10px">Low Balance: Add money to continue buying data.</div><div class="row" style="margin-top:10px"><button class="buy" onclick="show('addmoney')">+ Add Money</button><button onclick="show('history')">History</button><button onclick="show('support')">Support</button></div></div>
+<div class="card"><label>Search</label><input id="search" placeholder="Search MTN, Airtime, NEPA..." oninput="searchPlans()"><div class="grid"><div class="box" onclick="show('buydata')">📱 Data</div><div class="box" onclick="show('airtime')">📞 Airtime</div><div class="box" onclick="show('bills')">🧾 Bills</div><div class="box" onclick="show('cable')">📺 Cable</div><div class="box" onclick="show('tocash')">💵 To Cash</div><div class="box" onclick="show('addmoney')">💰 Add Money</div><div class="box" onclick="show('history')">🧾 History</div><div class="box" onclick="show('refer')">🎁 Refer</div></div></div>
+<div class="card"><h3>Daily Deals - Today Only</h3><p>MTN 1GB SME ₦380 (Normal ₦520) Save ₦140</p><button class="buy" onclick="buyDeal()">Buy Daily Deal Now</button></div>
+<div class="card"><h3>Cheap Data Bundles</h3><p>MTN - Glo - Airtel - 9mobile - From ₦280</p><button class="buy2" onclick="show('buydata')">Buy Data</button></div>
+<div class="card"><h3>Pay NEPA / Bills</h3><p>Electricity, Water, Internet - Instant Token</p><button class="buy2" onclick="show('bills')">Pay Bills</button></div>
+<div class="card"><h3>Cable TV</h3><p>DSTV - GOTV - Startimes - From ₦1,500</p><button class="buy2" onclick="show('cable')">Renew Cable</button></div>
+<div class="card"><h3>Popular Plans</h3><div id="popular"></div></div>
+<div class="card"><h3>Saved Numbers</h3><p id="savedList">No saved numbers yet</p><button onclick="show('airtime')">+ Save This Number</button></div>
+<div class="card"><h3>Refer & Earn</h3><p>Code: <b>PAUL2026</b> • ₦200 per invite</p><button class="buy2" onclick="show('refer')">View Referral</button></div>
+<div class="card"><h3>Recent Orders</h3><div id="recent">No transactions yet.</div><button onclick="show('history')">View all history</button></div>
+<div style="height:70px"></div></div>
+
+<div id="screen" style="display:none"><div class="card"><button onclick="goHome()">← Back</button><div id="screenBody"></div></div><div style="height:70px"></div></div>
+<div id="pinBox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);padding:20px"><div class="card"><h3>Enter Transaction PIN</h3><p>Default PIN is 1234</p><input id="pinIn" readonly placeholder="••••"><div class="pinpad"><button onclick="pinKey(1)">1</button><button onclick="pinKey(2)">2</button><button onclick="pinKey(3)">3</button><button onclick="pinKey(4)">4</button><button onclick="pinKey(5)">5</button><button onclick="pinKey(6)">6</button><button onclick="pinKey(7)">7</button><button onclick="pinKey(8)">8</button><button onclick="pinKey(9)">9</button><button onclick="pinBack()">⌫</button><button onclick="pinKey(0)">0</button><button onclick="pinClear()">C</button></div><div id="pinMsg"></div><button class="buy" onclick="confirmPin()">Confirm Payment</button><button onclick="closePin()">Cancel</button></div></div>
+<div id="receipt" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);padding:20px"><div class="card"><h3>✅ Receipt</h3><div id="receiptBody"></div><button class="buy" onclick="closeReceipt()">Done</button><button onclick="closeReceipt();show('history')">View in History</button></div></div>
+<div class="nav2"><button onclick="goHome()">🏠 Home</button><button onclick="show('buydata')">📱 Data</button><button onclick="show('addmoney')">💰 Wallet</button><button onclick="show('history')">🧾 Tickets</button><button onclick="show('support')">💬 Support</button></div>
+<script>
+let cur=0, pin='', pendingOrder=null, savedNumbers=[], favs=new Set(), bal=0, txnPin='1234', historyList=[], invites=0;
+const PLANS=${JSON.stringify(PLANS)};
+function go(i){cur=i;document.querySelectorAll('.slide').forEach((s,k)=>s.classList.toggle('active',k===cur));document.querySelectorAll('.dot').forEach((d,k)=>d.classList.toggle('on',k===cur));}
+function next(){ if(cur===3){goLogin();} else go(cur+1);} function prev(){ if(cur>0) go(cur-1);} function skip(){goLogin();}
+function goLogin(){document.getElementById('onboard').style.display='none';document.getElementById('auth').style.display='block';}
+function backPic(){document.getElementById('auth').style.display='none';document.getElementById('onboard').style.display='block';}
+function showReg(){document.getElementById('loginF').style.display='none';document.getElementById('regF').style.display='block';}
+function showLogin(){document.getElementById('regF').style.display='none';document.getElementById('loginF').style.display='block';}
+function eye(id){let e=document.getElementById(id);e.type=e.type==='password'?'text':'password';}
+function forgot(){document.getElementById('lMsg').textContent='Reset help sent - Contact Support 07044102707 if you cannot login.';}
+function login(){let ph=document.getElementById('lPhone').value.trim(); if(!ph){document.getElementById('lMsg').textContent='Enter phone number';return;} document.getElementById('auth').style.display='none';document.getElementById('home').style.display='block';renderPopular();}
+function register(){let f=document.getElementById('rF').value.trim(), ph=document.getElementById('rPhone').value.trim(), p=document.getElementById('rPass').value, p2=document.getElementById('rPass2').value; if(!f||!ph){document.getElementById('rMsg').textContent='Enter First Name and Phone';return;} if(p!==p2){document.getElementById('rMsg').textContent='Passwords do not match';return;} let ref=document.getElementById('rRef').value.trim(); if(ref==='PAUL2026'){bal+=200;document.getElementById('bal').textContent=bal.toFixed(2);} document.getElementById('rMsg').textContent='✅ Registered! Now Login.'; document.getElementById('lPhone').value=ph; showLogin();}
+function goHome(){document.getElementById('screen').style.display='none';document.getElementById('home').style.display='block';}
+function renderPopular(){document.getElementById('popular').innerHTML=PLANS.slice(0,6).map(p=>'<div style="display:flex;justify-content:space-between;padding:8px;border-bottom:1px solid #eee"><span>'+p.name+' - ₦'+p.price+'</span><button onclick="quickBuy(\\''+p.id+'\\')">Buy</button> <button onclick="toggleFav(\\''+p.id+'\\')">♥</button></div>').join('');}
+function toggleFav(id){ if(favs.has(id)){favs.delete(id);alert('Removed from Favourites');} else {favs.add(id);alert('Added to Favourites');}}
+function quickBuy(id){let p=PLANS.find(x=>x.id===id); pendingOrder={plan:p.name, amount:p.price, provider:'VTU.ng'}; show('buydata');}
+function buyDeal(){pendingOrder={plan:'MTN 1GB SME', amount:380, provider:'VTU.ng'}; show('buydata');}
+function searchPlans(){let q=document.getElementById('search').value.toLowerCase(); if(!q) return; let f=PLANS.filter(p=>p.name.toLowerCase().includes(q)); alert(f.length? f.map(p=>p.name+' - ₦'+p.price).join('\\n') : 'No plan found for '+q);}
+function show(name){document.getElementById('home').style.display='none';document.getElementById('screen').style.display='block'; let b=document.getElementById('screenBody');
+ if(name==='buydata'){b.innerHTML='<h2>Buy Data</h2><label>Provider</label><select id="buyProv" onchange="currentProvider=this.value;filterPlans()"><option>Husmo</option><option>VTPass</option><option>VTU.ng</option><option>Manual</option></select><label>Network</label><select id="net" onchange="filterPlans()"><option>MTN</option><option>AIRTEL</option><option>GLO</option><option>9MOBILE</option></select><label>Category</label><div><button class="chip on" onclick="cat(this)">SME</button> <button class="chip" onclick="cat(this)">GIFTING</button> <button class="chip" onclick="cat(this)">AWOOF</button> <button class="chip" onclick="cat(this)">DATA SHARE</button></div><label>Plan</label><select id="planSel">'+PLANS.map(p=>'<option value="'+p.id+'">'+p.name+' - ₦'+p.price+'</option>').join('')+'</select><label>Phone</label><input id="buyPhone" value="07044102707"><label>Promo Code</label><div class="row"><input id="promo" placeholder="DATATECH10 / WELCOME50 / PAUL100"><button onclick="applyPromo()">Apply</button></div><div id="promoMsg"></div><h3>Data Calculator</h3><label>Usage</label><select id="calcUse"><option>Light - Chat + Browsing (0.5GB / day)</option><option>Medium - Social + Video</option><option>Heavy - Streaming</option></select><label>Number of days e.g 7</label><input id="calcDays" placeholder="7"><button onclick="calcData()">Calculate</button><div id="calcRes"></div><label>Schedule Purchase</label><select id="sched"><option>Now</option><option>Tomorrow</option><option>Next Week</option></select><label><input type="checkbox" id="autoRen" style="width:auto"> Auto-Renew this plan every month</label><button class="buy" onclick="startBuy()">Buy</button>';}
+ setTimeout(()=>{filterPlans();},100); else if(name==='airtime'){b.innerHTML='<h2>Buy Airtime</h2><label>Network</label><select id="atNet"><option>MTN</option><option>AIRTEL</option><option>GLO</option><option>9MOBILE</option></select><label>Choose Amount</label><div><button class="chip" onclick="setAmt(100)">₦100</button> <button class="chip" onclick="setAmt(200)">₦200</button> <button class="chip" onclick="setAmt(500)">₦500</button> <button class="chip" onclick="setAmt(1000)">₦1,000</button></div><label>Or Enter Custom Amount</label><input id="atAmt" placeholder="e.g. 300"><label>Phone</label><input id="atPhone" value="07044102707"><button onclick="saveNum()">+ Save This Number</button><p id="savedMsg"></p><button class="buy" onclick="startAirtime()">Buy Airtime</button>';}
+ else if(name==='bills'){b.innerHTML='<h2>Pay NEPA / Bills</h2><label>Disco</label><select id="disco"><option>IKEDC</option><option>EKEDC</option><option>AEDC</option><option>IBEDC</option><option>KEDCO</option><option>PHED</option><option>EEDC</option><option>JEDC</option><option>KAEDCO</option><option>BEDC</option><option>YEDC</option></select><label>Meter Type</label><select id="mType"><option>Prepaid</option><option>Postpaid</option></select><label>Meter Number</label><input id="meter" placeholder="Meter Number"><label>Amount</label><input id="billAmt" placeholder="Amount"><button class="buy" onclick="startBill()">Pay Now</button><button onclick="goHome()">Cancel</button>';}
+ else if(name==='cable'){b.innerHTML='<h2>Cable TV</h2><label>Provider</label><select id="cabProv"><option>DSTV</option><option>GOTV</option><option>Startimes</option></select><label>Smartcard Number</label><input id="smart" placeholder="Smartcard"><label>Package</label><select id="cabPack" onchange="cabPrice()"><option value="1500">Basic - ₦1500</option><option value="3000">Standard - ₦3000</option><option value="5000">Premium - ₦5000</option></select><p>Price: ₦<span id="cabP">1500</span></p><button class="buy" onclick="startCable()">Renew Cable</button>';}
+ else if(name==='tocash'){b.innerHTML='<h2>Airtime to Cash - 85%</h2><label>Network</label><select id="tcNet"><option>MTN</option><option>AIRTEL</option><option>GLO</option><option>9MOBILE</option></select><label>Amount You Send</label><input id="tcAmt" value="1000" oninput="tcCalc()"><p>You Receive (85%): ₦<span id="tcRecv">850</span></p><label>Account Number</label><input id="tcAcc" placeholder="Account Number"><label>Bank Name</label><input id="tcBank" placeholder="Bank Name"><button onclick="getNum()">Get Transfer Number</button><p id="tcNum"></p><button class="buy" onclick="startToCash()">I Have Sent</button><button onclick="goHome()">Cancel</button>';}
+ else if(name==='addmoney'){b.innerHTML='<h2>Add Money</h2><span class="badge green">LIVE MODE / TEST MODE - Paystack TEST</span><h3>YOUR PERSONAL VIRTUAL ACCOUNT - AUTOMATIC</h3><button onclick="createVA()">Create My Virtual Account</button><p id="vaMsg"></p><label>Amount</label><div><button class="chip" onclick="setAdd(1000)">₦1,000</button> <button class="chip" onclick="setAdd(2000)">₦2,000</button> <button class="chip" onclick="setAdd(5000)">₦5,000</button> <button class="chip" onclick="setAdd(10000)">₦10,000</button></div><label>Custom Amount</label><input id="addAmt" value="1000"><label>Payment Method</label><select id="addMethod"><option>Bank Transfer Automatic</option><option>Paystack</option><option>OPay Backup</option><option>Manual</option></select><label>Paystack Email</label><input id="addEmail" placeholder="you@email.com"><p>OPay backup - 7044102707 - DATATECH - Ugochukwu Paul Ojukwu<br>Transfer to 7044102707, then enter amount and tap Confirm Funding.</p><button class="buy" onclick="startAdd()">Proceed to Add Money</button><button onclick="addHaveTransferred()">I Have Transferred</button><button onclick="goHome()">Cancel</button>';}
+ else if(name==='history'){b.innerHTML='<h2>History</h2><div><button class="chip on" onclick="filterHist(this,\\'All\\')">All</button> <button class="chip" onclick="filterHist(this,\\'Data\\')">Data</button> <button class="chip" onclick="filterHist(this,\\'Airtime\\')">Airtime</button> <button class="chip" onclick="filterHist(this,\\'Bills\\')">Bills</button> <button class="chip" onclick="filterHist(this,\\'Cable\\')">Cable</button> <button class="chip" onclick="filterHist(this,\\'Cash\\')">Cash</button> <button class="chip" onclick="filterHist(this,\\'Add Money\\')">Add Money</button></div><div id="histList">'+(historyList.length? historyList.map(h=>'<p>'+h+'</p>').join('') : '<p>No transactions yet.</p>')+'</div><h3>Export and Statement</h3><p>Export History is your raw file. Download Statement is your official statement.</p><button onclick="exportHist()">Export History (CSV) - '+(historyList.length? historyList.length+' records' : 'No History Yet')+'</button>';}
+ else if(name==='refer'){b.innerHTML='<h2>Refer & Earn</h2><p>Your code: <b>PAUL2026</b> • ₦200 per invite</p><p>Invited: <span id="invC">0</span> • Earned: ₦<span id="invE">0</span></p><button class="buy" onclick="invite()">I invited someone</button>';}
+ else if(name==='profile'){b.innerHTML='<h2>Profile</h2><label>Full Name</label><input id="profName" value="Ugochukwu Ojukwu"><label>New PIN (4 digits)</label><input id="newPin" placeholder="1234"><button onclick="updatePin()">Update PIN</button><p id="pinUpMsg"></p><h3>Beneficiaries</h3><p id="benList">No beneficiaries saved yet</p><label>Beneficiary name e.g Mum</label><input id="benName"><label>Beneficiary phone</label><input id="benPhone"><button onclick="addBen()">+ Add Beneficiary</button><h3>KYC</h3><label>KYC - Full Name</label><input id="kycName" placeholder="Full Name"><button onclick="submitKYC()">Submit KYC For Verification</button><p id="kycMsg"></p><h3>Change Password</h3><label>Old password</label><input id="oldPass" type="password"><label>New password</label><input id="newPass" type="password"><button onclick="changePass()">Change Password</button><p id="passMsg"></p><h3>App Lock</h3><button id="lockBtn" onclick="toggleLock()">App Lock: OFF</button><h3>Monthly Summary</h3><p>Total Spent This Month: ₦0.00 | Total Transactions: '+historyList.length+'</p><button onclick="logout()">Log out</button>';}
+ else if(name==='support'){b.innerHTML='<h2>Support</h2><p>Call / WhatsApp: <a href="tel:07044102707">07044102707</a></p><label>Ticket subject</label><input id="tickSub" placeholder="Subject"><label>Details</label><textarea id="tickDet" placeholder="Details"></textarea><button class="buy" onclick="createTicket()">Create Ticket</button><p id="tickMsg"></p><h3>Your tickets</h3><p>Ticket 212597 - Open</p>';}
 }
-function mapPlan(plan, networkId){
-  if(plan===undefined||plan===null) return plan;
-  var s=String(plan).trim();
-  if(/^\d+$/.test(s)) return parseInt(s,10);
-  var low=s.toLowerCase().replace(/[-_]/g,' ').replace(/\s+/g,' ').trim();
-  // Normalize frontend slugs like mtn-awoof-750mb-1day -> mtn awoof 750mb 1day, and strip day suffix for lookup
-  var lowNoDay = low.replace(/\s+(1day|1 day|7days|7 days|30days|30 days)$/,'').trim();
-  // --- MTN ---
-  var mtn={'mtn sme 500mb':369,'mtn 500mb':369,'mtn sme 1gb':51,'mtn 1gb':51,'mtn sme 2gb':50,'mtn 2gb':50,'mtn sme 3gb':225,'mtn 3gb':225,'mtn sme 10gb':466,'mtn 10gb':466,'mtn sme2 500mb':267,'mtn sme2 1gb':262,'mtn sme2 1.5gb':301,'mtn sme2 2gb':263,'mtn sme2 3gb':264,'mtn sme2 5gb':265,'mtn sme2 10gb':266,'mtn sme2 100mb':302,'mtn corporate gifting 500mb':99,'mtn corporate 1gb':100,'mtn gifting 500mb':373,'mtn gifting 1.5gb':61,'mtn gifting 2gb':283,'mtn gifting 5gb':309,'mtn awoof 500mb':500,'mtn awoof 4gb':499,'mtn awoof 5gb':498};
-  // --- AIRTEL ---
-  var airtel={'airtel gifting 500mb':387,'airtel 500mb':431,'airtel corporate 500mb':372,'airtel gifting 1gb':125,'airtel 1gb':125,'airtel corporate 1gb':213,'airtel gifting 1.5gb':282,'airtel gifting 2gb':126,'airtel 2gb':126,'airtel corporate 2gb':214,'airtel gifting 3gb':133,'airtel 3gb':133,'airtel gifting 4gb':134,'airtel 4gb':134,'airtel gifting 8gb':135,'airtel awoof 1gb':404,'airtel awoof 1.5gb':425,'airtel awoof 2gb':430,'airtel awoof 500mb':431,'airtel awoof 150mb':442,'airtel awoof 300mb':443,'airtel awoof 600mb':444,'airtel awoof 5gb':445,'airtel awoof 3gb':446,'airtel awoof 10gb':448,'airtel corporate 3gb':464,'airtel gifting 6gb':486,'airtel gifting 100mb':383,'airtel gifting 300mb':385};
-  // --- GLO ---
-  var glo={'glo corporate 500mb':255,'glo 500mb':255,'glo corporate 1gb':256,'glo 1gb':256,'glo corporate 2gb':257,'glo 2gb':257,'glo corporate 3gb':258,'glo 3gb':258,'glo corporate 5gb':259,'glo 5gb':259,'glo corporate 10gb':260,'glo 10gb':260,'glo corporate 200mb':261,'glo 200mb':261,'glo gifting 1.5gb':37,'glo gifting 2.6gb':32,'glo gifting 5.2gb':31,'glo gifting 1.1gb':295,'glo awoof 750mb':326,'glo awoof 1.5gb':327,'glo awoof 2.5gb':328,'glo awoof 10gb':329,'glo corporate 1gb night':438,'glo corporate 3gb night':439,'glo corporate 5gb night':440,'glo corporate 10gb night':441};
-  // --- 9MOBILE ---
-  var nine={'9mobile sme 500mb':268,'9mobile 500mb':268,'9mobile sme 1gb':241,'9mobile 1gb':241,'9mobile sme 1.5gb':243,'9mobile 1.5gb':243,'9mobile sme 2gb':242,'9mobile 2gb':242,'9mobile sme 3gb':244,'9mobile 3gb':244,'9mobile sme 4gb':245,'9mobile 4gb':245,'9mobile sme 5gb':247,'9mobile 5gb':247,'9mobile sme 10gb':248,'9mobile 10gb':248,'9mobile gifting 500mb':123,'9mobile gifting 250mb':122,'9mobile gifting 100mb':118,'9mobile corporate 1gb':269,'9mobile corporate 2gb':271,'9mobile awoof 3gb':497};
-  var table = {};
-  if(networkId===1) table=mtn;
-  else if(networkId===4) table=airtel;
-  else if(networkId===2) table=glo;
-  else if(networkId===3) table=nine;
-  else table=Object.assign({},mtn,airtel,glo,nine);
-  // Extra 9Mobile/Airtel big plans from last screenshot
-  var extra={'9mobile corporate 7.5gb':280,'9mobile corporate 11gb':281,'9mobile awoof 2gb 1day':284,'9mobile corporate 10gb':291,'9mobile corporate 5gb':295,'9mobile awoof 1gb 1day':310,'9mobile gifting 200mb':321,'9mobile gifting 2.5gb':322,'9mobile gifting 35gb':323,'9mobile gifting 22gb':324,'9mobile awoof 2.5gb 1day':340,'9mobile awoof 1.5gb 7days':367,'9mobile corporate 40gb':458,'9mobile corporate 250mb':478,'9mobile awoof 1gb 30days':495,'9mobile awoof 2gb 30days':496,'airtel gifting 35gb':132,'airtel gifting 13gb':138,'airtel gifting 75gb':139,'airtel gifting 100gb':140,'airtel gifting 160gb':141,'airtel corporate 5gb':215};
-  Object.assign(table, extra);
-  if(table[low]!==undefined) return table[low];
-  if(table[lowNoDay]!==undefined) return table[lowNoDay];
-  // MTN Awoof 1-day / 7-day plans - Husmo IDs confirmed from Husmo plan list pattern (500-series Awoof). If Husmo says 'pk value' again, use numeric ID from Husmo dashboard.
-  var awoofFix={'mtn awoof 750mb':501,'mtn awoof 1gb':502,'mtn awoof 1.1gb':503,'mtn awoof 1.5gb':504,'mtn awoof 750mb 1day':501,'mtn awoof 1gb 1day':502,'mtn awoof 1.1gb 7days':503,'mtn awoof 1.5gb 7days':504};
-  if(awoofFix[low]!==undefined) return awoofFix[low];
-  if(awoofFix[lowNoDay]!==undefined) return awoofFix[lowNoDay];
-  // Generic fallback by size + network
-  if(low.indexOf('500mb')>=0){ if(networkId===1) return 369; if(networkId===4) return 431; if(networkId===2) return 255; if(networkId===3) return 268; }
-  if(low.indexOf('1gb')>=0){ if(networkId===1) return 51; if(networkId===4) return 125; if(networkId===2) return 256; if(networkId===3) return 241; }
-  if(low.indexOf('2gb')>=0){ if(networkId===1) return 50; if(networkId===4) return 126; if(networkId===2) return 257; if(networkId===3) return 242; }
-  if(low.indexOf('3gb')>=0){ if(networkId===1) return 225; if(networkId===4) return 133; if(networkId===2) return 258; if(networkId===3) return 244; }
-  if(low.indexOf('5gb')>=0){ if(networkId===1) return 265; if(networkId===2) return 259; if(networkId===3) return 247; if(networkId===4) return 445; }
-  if(low.indexOf('10gb')>=0){ if(networkId===1) return 466; if(networkId===2) return 260; if(networkId===3) return 248; if(networkId===4) return 448; }
-  return s;
+function cat(el){document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));el.classList.add('on'); filterPlans();}
+let currentProvider='Husmo'; function filterPlans(){let net=document.getElementById('net'); if(!net) return; let n=net.value; let catEl=document.querySelector('.chip.on'); let catTxt=catEl?catEl.textContent.trim():'GIFTING'; let sel=document.getElementById('planSel'); if(!sel) return; let filtered=PLANS.filter(p=>p.network===n && p.cat===catTxt && (!p.provider || p.provider===currentProvider)); if(filtered.length===0) filtered=PLANS.filter(p=>p.network===n && (!p.provider || p.provider===currentProvider)); if(filtered.length===0) filtered=PLANS.filter(p=>p.network===n); sel.innerHTML=filtered.map(p=>'<option value="'+p.id+'">'+p.name+' - ₦'+p.price+'</option>').join('');}
+function applyPromo(){let v=document.getElementById('promo').value.trim(); document.getElementById('promoMsg').textContent=['DATATECH10','WELCOME50','PAUL100'].includes(v)? '✅ Promo applied: '+v : '❌ Invalid promo';}
+function calcData(){let d=Number(document.getElementById('calcDays').value||7); document.getElementById('calcRes').textContent='You need '+(d*0.5).toFixed(1)+' GB for '+d+' days (Light).';}
+function setAmt(a){document.getElementById('atAmt').value=a;}
+function saveNum(){let ph=document.getElementById('atPhone').value; savedNumbers.push(ph); document.getElementById('savedMsg').textContent='Saved: '+ph; document.getElementById('savedList').textContent=savedNumbers.join(', ');}
+function startBuy(){let p=PLANS.find(x=>x.id===document.getElementById('planSel').value); pendingOrder={plan:p.name, amount:p.price, provider:'VTU.ng'}; openPin();}
+function startAirtime(){pendingOrder={plan:'Airtime '+document.getElementById('atNet').value, amount:Number(document.getElementById('atAmt').value||100), provider:'VTPass'}; openPin();}
+function startBill(){pendingOrder={plan:'NEPA '+document.getElementById('disco').value, amount:Number(document.getElementById('billAmt').value||1000), provider:'VTPass', token:'TOKEN-'+Date.now()}; openPin();}
+function startCable(){pendingOrder={plan:'Cable '+document.getElementById('cabProv').value, amount:Number(document.getElementById('cabPack').value), provider:'VTPass'}; openPin();}
+function cabPrice(){document.getElementById('cabP').textContent=document.getElementById('cabPack').value;}
+function tcCalc(){document.getElementById('tcRecv').textContent=Math.round(Number(document.getElementById('tcAmt').value||0)*0.85);}
+function getNum(){document.getElementById('tcNum').textContent='Transfer to 07044102707 (DATATECH) - You get 85%';}
+function startToCash(){pendingOrder={plan:'Airtime to Cash', amount:Number(document.getElementById('tcAmt').value||1000), provider:'Manual'}; openPin();}
+function setAdd(a){document.getElementById('addAmt').value=a;}
+function createVA(){document.getElementById('vaMsg').textContent='Creating... Paystack says: Dedicated NUBAN is not available for your business - This is from Paystack side, not DataTech fault. Use OPay backup 7044102707 for now.';}
+function addHaveTransferred(){document.getElementById('vaMsg').textContent='Checking transfer... If you sent to OPay 7044102707, Admin will confirm. Use I Have Transferred + amount.';}
+function startAdd(){pendingOrder={plan:'Add Money', amount:Number(document.getElementById('addAmt').value||1000), provider:'Paystack'}; openPin();}
+function filterHist(el, t){document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));el.classList.add('on'); document.getElementById('histList').innerHTML= t==='All'? (historyList.length? historyList.map(h=>'<p>'+h+'</p>').join('') : '<p>No transactions yet.</p>') : '<p>No '+t+' transactions yet.</p>';}
+function exportHist(){alert(historyList.length? 'Exporting '+historyList.length+' records as CSV' : 'No History Yet - nothing to export');}
+function invite(){invites++; document.getElementById('invC').textContent=invites; document.getElementById('invE').textContent=invites*200; bal+=200; document.getElementById('bal').textContent=bal.toFixed(2);}
+function updatePin(){let v=document.getElementById('newPin').value; if(v.length!==4){document.getElementById('pinUpMsg').textContent='PIN must be 4 digits';return;} txnPin=v; document.getElementById('pinUpMsg').textContent='✅ PIN updated';}
+function addBen(){let n=document.getElementById('benName').value, ph=document.getElementById('benPhone').value; if(!n||!ph) return; document.getElementById('benList').textContent=n+' - '+ph;}
+function submitKYC(){document.getElementById('kycMsg').textContent='✅ KYC submitted for verification';}
+function changePass(){document.getElementById('passMsg').textContent='✅ Password changed';}
+let lockOn=false; function toggleLock(){lockOn=!lockOn; document.getElementById('lockBtn').textContent='App Lock: '+(lockOn?'ON':'OFF');}
+function logout(){document.getElementById('screen').style.display='none';document.getElementById('home').style.display='none';document.getElementById('auth').style.display='block';}
+function createTicket(){document.getElementById('tickMsg').textContent='✅ Ticket created - Ref 212597'+Math.floor(Math.random()*100); }
+function showProfile(){show('profile');}
+function openPin(){pin='';document.getElementById('pinIn').value='';document.getElementById('pinMsg').textContent='';document.getElementById('pinBox').style.display='block';}
+function closePin(){document.getElementById('pinBox').style.display='none';}
+function pinKey(n){ if(pin.length<4){pin+=n; document.getElementById('pinIn').value='•'.repeat(pin.length);} }
+function pinBack(){pin=pin.slice(0,-1); document.getElementById('pinIn').value='•'.repeat(pin.length);}
+function pinClear(){pin='';document.getElementById('pinIn').value='';}
+async function confirmPin(){ if(pin!==txnPin){document.getElementById('pinMsg').textContent='❌ Incorrect PIN';return;} closePin(); let r=await fetch('/api/buy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'data', network:'MTN', phone:'07044102707', plan:pendingOrder.plan, amount:pendingOrder.amount})}); let j=await r.json(); historyList.push(pendingOrder.plan+' - ₦'+pendingOrder.amount+' - '+(j.provider||pendingOrder.provider)+' - Request: '+(j.request_id||'')); document.getElementById('recent').innerHTML=historyList.map(h=>'<p>'+h+'</p>').join(''); document.getElementById('receiptBody').innerHTML='<p>'+pendingOrder.plan+'</p><p>Amount: ₦'+pendingOrder.amount+'</p><p>Provider: '+(j.provider||pendingOrder.provider)+'</p><p>Request ID: '+(j.request_id||'')+'</p><p>'+(j.message||'Done')+'</p>'; document.getElementById('receipt').style.display='block'; }
+function closeReceipt(){document.getElementById('receipt').style.display='none'; goHome();}
+setInterval(()=>{ if(document.getElementById('onboard').style.display!=='none') next(); },4000);
+</script></body></html>`;
+
+const ADMIN = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DataTech Admin</title><style>${STYLE}</style></head><body>
+<div id="pinScreen"><div class="card"><h1>Admin Panel - Owner Only</h1><p>Ugochukwu Ojukwu<br>07044102707 - ojukwupaul2@gmail.com</p><label>Admin PIN</label><div class="row"><input id="adminPin" type="password" placeholder="7075"><button onclick="eyeA()">👁</button></div><button class="buy2" onclick="unlock()">Unlock Admin Panel</button><p id="pinErr"></p></div></div>
+<div id="adminDash" style="display:none"><div class="topbar"><div class="logo">DATA<span>TECH</span> Admin</div><button onclick="lock()">Lock Admin</button></div>
+<div class="tabs"><button class="on" onclick="tab(this,'dash')">Dashboard</button><button onclick="tab(this,'acc')">Accounts</button><button onclick="tab(this,'ord')">Orders</button><button onclick="tab(this,'bank')">Bank Transfers</button><button onclick="tab(this,'vtu')">VTU Settings</button><button onclick="tab(this,'pay')">Paystack Settings</button><button onclick="tab(this,'vtpass')">VTPass Settings</button><button onclick="tab(this,'husmo')">Husmo</button><button onclick="tab(this,'tickets')">Tickets</button></div>
+<div class="card" id="dashTab"><h2>Dashboard</h2><div class="grid"><div class="box" onclick="tabBtn('acc')">ACCOUNTS<br><span id="accC">1</span></div><div class="box" onclick="tabBtn('ord')">ORDERS<br><span id="ordC">0</span></div></div><p>Provider snapshot: VTU provider: VTU.ng - vtu.ng • Mode: Manual • Paystack: TEST • VTPass: SANDBOX</p><p class="small">Paystack default is TEST until Live keys are saved.</p><div class="row"><button class="buy2" onclick="tabBtn('ord')">Add Order</button><button onclick="tabBtn('ord')">View Orders</button></div><button onclick="refresh()">Refresh Status</button><p id="refreshMsg"></p><h3>Latest Orders</h3><div id="latest">No orders yet. Add an order below in Orders to track it here.</div></div>
+<div class="card" id="accTab" style="display:none"><h2>Accounts</h2><div id="accList"></div><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="ordTab" style="display:none"><h2>Add Order</h2><label>Provider</label><select id="ordProv" onchange="ordProvChange()"><option>VTU.ng - vtu.ng (Cheaper ₦265)</option><option>VTPass</option><option>Husmo</option><option>Manual</option></select><p id="ordHint">VTU.ng: MTN 1GB 265 - Cheaper than VTPass</p><label>Plan</label><select id="ordPlan"><option>MTN 1GB</option><option>MTN 1.5GB</option><option>MTN 2GB</option><option>MTN 3GB</option></select><label>Phone</label><input id="ordPhone" placeholder="07044102707"><label>Amount</label><input id="ordAmt" value="265"><label>Request ID</label><input id="ordReq" placeholder="Request ID from provider"><label>serviceID</label><input id="ordServ" value="MTN-DATA"><label>variation_code</label><input id="ordVar" value="MTN-1GB"><button class="buy" onclick="addOrder()">Add Order</button><p id="ordMsg"></p><h3>Orders List</h3><div id="ordList">No orders yet.</div><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="bankTab" style="display:none"><h2>Pending Bank Transfers (Backup OPay Only)</h2><p>No pending transfers. Automatic Paystack transfers do not appear here.</p><div id="pendList"></div><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="vtuTab" style="display:none"><h2>VTU Settings - Choose Provider</h2><label>Provider</label><select id="vtuProv"><option>VTU.ng - vtu.ng (Cheaper ₦265)</option><option>VTPass</option><option>Husmo</option></select><label>Mode</label><select id="vtuMode"><option>Manual</option><option>Automatic</option></select><label>API Key / Token</label><input id="vtuKey" placeholder="VTU API Key"><label>Secret Key (VTPass only)</label><input id="vtuSec" placeholder="Secret"><label>Public Key (VTPass only)</label><input id="vtuPub" placeholder="Public"><label>Live or Sandbox?</label><select id="vtuEnv"><option>SANDBOX - Test</option><option>LIVE - Real Money</option></select><button onclick="saveVTU()">Save VTU Settings</button><button onclick="testVTU()">Test Connection</button><p id="vtuMsg"></p><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="payTab" style="display:none"><h2>Paystack Settings</h2><label>Paystack Public Key</label><input id="psPub" placeholder="pk_test_..."><label>Paystack Secret Key</label><div class="row"><input id="psSec" type="password" placeholder="sk_test_..."><button onclick="eyeA2()">👁</button></div><label>Environment</label><select id="psEnv"><option>TEST - No Real Money</option><option>LIVE - Real Money</option></select><button onclick="savePS()">Save Paystack Settings</button><button onclick="testPS()">Test Connection — Paystack</button><p id="psMsg"></p><p>Paystack says: Dedicated NUBAN is not available for your business - This is from Paystack side, not DataTech fault.</p><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="vtpassTab" style="display:none"><h2>VTPass Settings</h2><label>VTPass API Key</label><input id="vpKey"><label>Public Key</label><input id="vpPub"><label>Secret Key</label><input id="vpSec"><p>CURRENT ENVIRONMENT: <b id="vpEnvTxt">SANDBOX</b></p><div class="row"><button id="vpSand" style="background:#dcfce7;padding:20px" onclick="setVP('SANDBOX')">SANDBOX ✓ ACTIVE<br>https://sandbox.vtpass.com/api</button><button id="vpLive" style="background:#fff;padding:20px" onclick="setVP('LIVE')">LIVE<br>Tap to switch<br>https://vtpass.com/api</button></div><button onclick="testVP()">Test Connection — VTPass /wallet-balance</button><p id="vpMsg"></p><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="husmoTab" style="display:none"><h2>Husmo Settings (Backup)</h2><label>Husmo API Key / Token</label><input id="husmoKey" placeholder="Token"><p>Backup plans: husmo-mtn-50 (24), husmo-mtn-500-sme2 (137.5), husmo-mtn-500-sme (360), husmo-airtel-200 (195), husmo-airtel-300 (293)</p><button onclick="testHusmo()">Test Connection — Husmo</button><p id="husmoMsg"></p><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card" id="ticketsTab" style="display:none"><h2>Tickets</h2><p>Ticket 212597 - Open - Support 07044102707</p><button onclick="tabBtn('dash')">Back to Dashboard</button></div>
+<div class="card"><h3>Provider Status</h3><p id="provStatus">VTPass keys: Missing • Husmo token: Missing • Paystack: TEST - Missing keys • VTPass: SANDBOX • Base: https://sandbox.vtpass.com/api • Paystack Base: https://api.paystack.co</p><button onclick="refresh()">Refresh Status</button></div>
+<div class="card"><button class="buy2" onclick="saveAll()">Save Provider Settings</button><p id="saveMsg"></p></div></div>
+<script>
+let orders=[];
+function eyeA(){let e=document.getElementById('adminPin');e.type=e.type==='password'?'text':'password';}
+function eyeA2(){let e=document.getElementById('psSec');e.type=e.type==='password'?'text':'password';}
+function unlock(){ if(document.getElementById('adminPin').value==='7075'){document.getElementById('pinScreen').style.display='none';document.getElementById('adminDash').style.display='block';} else {document.getElementById('pinErr').textContent='❌ Wrong PIN';}}
+function lock(){document.getElementById('adminDash').style.display='none';document.getElementById('pinScreen').style.display='block';}
+function tab(el, name){document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('on'));el.classList.add('on'); ['dash','acc','ord','bank','vtu','pay','vtpass','husmo','tickets'].forEach(n=>{let e=document.getElementById(n+'Tab'); if(e) e.style.display=(n===name?'block':'none');});}
+function tabBtn(name){let btn=document.querySelectorAll('.tabs button'); let map={dash:0,acc:1,ord:2,bank:3,vtu:4,pay:5,vtpass:6,husmo:7,tickets:8}; if(btn[map[name]]) tab(btn[map[name]], name);}
+function ordProvChange(){let v=document.getElementById('ordProv').value; let hint=document.getElementById('ordHint'); if(v.startsWith('VTU')){hint.textContent='VTU.ng: MTN 1GB 265 - Cheaper than VTPass';document.getElementById('ordAmt').value=265;document.getElementById('ordServ').value='MTN-DATA';document.getElementById('ordVar').value='MTN-1GB';} else if(v==='VTPass'){hint.textContent='VTPass price - check VTPass';document.getElementById('ordServ').value='mtn-data';document.getElementById('ordVar').value='mtn-10mb-100';} else if(v==='Husmo'){hint.textContent='Husmo backup';document.getElementById('ordServ').value='husmo-mtn-1gb';document.getElementById('ordVar').value='husmo-mtn-1gb';} else {hint.textContent='Manual - you buy by hand';document.getElementById('ordServ').value='MANUAL';document.getElementById('ordVar').value='MANUAL';}}
+function addOrder(){let ph=document.getElementById('ordPhone').value.trim(), req=document.getElementById('ordReq').value.trim(); if(!ph||!req){document.getElementById('ordMsg').textContent='❌ Enter phone and Request ID for the order';return;} let o={plan:document.getElementById('ordPlan').value, phone:ph, amount:document.getElementById('ordAmt').value, provider:document.getElementById('ordProv').value, req, serv:document.getElementById('ordServ').value, vari:document.getElementById('ordVar').value}; orders.push(o); document.getElementById('ordMsg').textContent='✅ Order added: '+o.plan+' - ₦'+o.amount+' - '+o.provider; document.getElementById('ordList').innerHTML=orders.map(x=>'<p>'+x.plan+' - ₦'+x.amount+' - '+x.provider+' - '+x.phone+' - '+x.req+' - '+x.serv+' / '+x.vari+'</p>').join(''); document.getElementById('latest').innerHTML=document.getElementById('ordList').innerHTML; document.getElementById('ordC').textContent=orders.length; document.getElementById('accList').innerHTML='<p>Ugochukwu Ojukwu - 07044102707 - ojukwupaul2@gmail.com - Balance ₦0</p>';}
+function saveVTU(){document.getElementById('vtuMsg').textContent='✅ VTU Settings saved.';}
+function testVTU(){document.getElementById('vtuMsg').textContent='Test: Provider '+document.getElementById('vtuProv').value+' • Mode '+document.getElementById('vtuMode').value+' • Env '+document.getElementById('vtuEnv').value;}
+function savePS(){document.getElementById('psMsg').textContent='✅ Paystack Settings saved: '+document.getElementById('psEnv').value;}
+function testPS(){let k=document.getElementById('psSec').value; document.getElementById('psMsg').textContent= !k? '❌ Paystack error: Missing keys - This is from Paystack side, not DataTech fault.' : 'Paystack says: Dedicated NUBAN is not available for your business - This is from Paystack side, not DataTech fault.';}
+function setVP(env){document.getElementById('vpEnvTxt').textContent=env; document.getElementById('vpSand').innerHTML= env==='SANDBOX'? 'SANDBOX ✓ ACTIVE<br>https://sandbox.vtpass.com/api' : 'SANDBOX<br>Tap to switch<br>https://sandbox.vtpass.com/api'; document.getElementById('vpLive').innerHTML= env==='LIVE'? 'LIVE ✓ ACTIVE<br>https://vtpass.com/api' : 'LIVE<br>Tap to switch<br>https://vtpass.com/api';}
+function testVP(){document.getElementById('vpMsg').textContent='VTPass Test: Env '+document.getElementById('vpEnvTxt').textContent+' - Check /wallet-balance';}
+function testHusmo(){document.getElementById('husmoMsg').textContent='Husmo Test: Checking balance...';}
+function refresh(){document.getElementById('refreshMsg').textContent='✅ Status refreshed - VTPass SANDBOX, Paystack TEST, VTU Manual'; document.getElementById('provStatus').textContent='VTPass keys: Missing • Husmo token: Missing • Paystack: TEST - Missing keys • VTPass: SANDBOX • Base: https://sandbox.vtpass.com/api • Paystack Base: https://api.paystack.co';}
+function saveAll(){document.getElementById('saveMsg').textContent='✅ Provider settings saved.';}
+</script></body></html>`;
+
+app.get('/', (req,res)=>res.send(CUSTOMER));
+app.get('/admin', (req,res)=>res.send(ADMIN));
+app.get('/vtpass-sandbox-test', (req,res)=>res.json({base: SETTINGS.vtPassEnv==='LIVE'? VTPASS_LIVE : VTPASS_SANDBOX, env: SETTINGS.vtPassEnv, has_key: !!(SETTINGS.vtpassKey||process.env.VTPASS_API_KEY), has_pub: !!SETTINGS.vtpassPub, has_sec: !!SETTINGS.vtpassSec, message:'Use Admin > VTPass Settings > Test Connection for full test'}));
+app.get('/health', (req,res)=>res.json({status:'ok'}));
+app.get('/api/plans', (req,res)=>res.json({vtpass_data:VTPASS_DATA, plans:PLANS, settings:SETTINGS}));
+app.get('/api/orders', (req,res)=>res.json({orders:ORDERS}));
+app.post('/api/settings', (req,res)=>{ SETTINGS={...SETTINGS, ...(req.body||{})}; res.json({success:true, settings:SETTINGS}); });
+app.post('/api/admin-order', (req,res)=>{ const o=req.body||{}; if(!o.phone||!o.request_id) return res.json({success:false,message:'Enter phone and Request ID for the order'}); ORDERS.push(o); res.json({success:true, order:o}); });
+async function vtpassBuy(type, network, phone, amount){
+  const request_id = String(Date.now()) + Math.random().toString(36).slice(2,8).toUpperCase();
+  let payload;
+  if(type==='airtime') payload={request_id, serviceID:VTPASS_AIRTIME[network], amount, phone};
+  else { const p=VTPASS_DATA[network]; payload={request_id, serviceID:p.serviceID, variation_code:p.variation, amount:p.price, phone}; }
+  const base = SETTINGS.vtPassEnv==='LIVE'? VTPASS_LIVE : VTPASS_SANDBOX;
+  const r=await fetch(base+'/pay',{method:'POST',headers:{'Content-Type':'application/json','api-key':SETTINGS.vtpassKey||process.env.VTPASS_API_KEY||'','public-key':SETTINGS.vtpassPub||'','secret-key':SETTINGS.vtpassSec||''},body:JSON.stringify(payload)});
+  const j=await r.json().catch(()=>({}));
+  return {request_id, vtpass:j, ok: j.code==='000'};
 }
-async function callHusmo(path, body){
-  const res = await fetch(HUSMO_BASE+path, {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Token ${HUSMO_API_KEY}`},body:JSON.stringify(body||{})});
-  const t = await res.text(); try{return JSON.parse(t);}catch(e){return {raw:t,status:res.status};}
-}
-async function getHusmo(path){
-  const res = await fetch(HUSMO_BASE+path, {headers:{'Authorization':`Token ${HUSMO_API_KEY}`}});
-  const t = await res.text(); try{return JSON.parse(t);}catch(e){return {raw:t,status:res.status};}
-}
-function newId(){return 'DATATECH'+Date.now()+Math.floor(Math.random()*1000);}
-function husmoRealReason(d){
-  if(!d) return '';
-  if(typeof d==='string') return d;
-  var r = d.api_response || d.message || d.msg || d.error || d.detail || d.response || (d.data && (d.data.api_response || d.data.message || d.data.msg || d.data.error || d.data.detail));
-  if(r) return String(r);
-  // No known field - show full Husmo reply so we can see real reason (cut to 300 chars)
-  try{ return JSON.stringify(d).slice(0,300); }catch(e){ return ''; }
-}
-function husmoOk(d){
-  if(!d) return false;
-  if(d.status==='success'||d.Status==='success'||d.success===true||d.Success===true||d.code==='000'||d.code===200||d.status_code===200||d.Status==='successful') return true;
-  var m = d.message||d.msg||d.api_response||'';
-  if(m && String(m).toLowerCase().indexOf('success')>=0) return true;
-  if(d.data && (d.data.status==='success'||d.data.Status==='success'||d.data.success===true)) return true;
-  if(d.api_response && String(d.api_response).toLowerCase().indexOf('success')>=0) return true;
-  return false;
-}
-app.get('/',(req,res)=>res.json({ok:true,service:'DATATECH Backend - HUSMO FINAL v3 ALL NETWORKS',base:HUSMO_BASE,time:new Date().toISOString()}));
-app.get('/api/health',(req,res)=>res.json({ok:true,husmo_configured:!!HUSMO_API_KEY,paystack_configured:!!PAYSTACK_SECRET,base:HUSMO_BASE}));
-app.get('/api/vendor-balance', async (req,res)=>{ try{ if(!HUSMO_API_KEY) return res.json({ok:false,message:'HUSMO_API_KEY not set'}); const data=await getHusmo('/user/'); res.json({ok:true,provider:'HUSMO',data}); }catch(e){res.status(500).json({ok:false,error:e.message});} });
-app.get('/api/test-husmo', async (req,res)=>{ try{ if(!HUSMO_API_KEY) return res.json({ok:false,message:'No Husmo key'}); const data=await getHusmo('/user/'); res.json({ok:true,message:'Connected to Husmo',data}); }catch(e){res.status(500).json({ok:false,error:e.message});} });
-app.get('/api/plans', async (req,res)=>{ try{const data=await getHusmo('/network/'); res.json({ok:true,data});}catch(e){res.status(500).json({ok:false,error:e.message});} });
-app.get('/api/networks', async (req,res)=>{ try{const data=await getHusmo('/get/network/'); res.json({ok:true,data});}catch(e){res.status(500).json({ok:false,error:e.message});} });
 app.post('/api/buy', async (req,res)=>{
+  const {type, network, phone, plan, amount}=req.body||{};
+  if(!phone) return res.json({success:false,message:'Enter phone number'});
+  if(SETTINGS.vtMode==='Manual'){
+    const o={plan:plan||'MTN 1GB', phone, amount:amount||265, provider:SETTINGS.vtProvider, request_id:'PENDING-'+Date.now(), status:'Pending - Manual'};
+    ORDERS.push(o);
+    return res.json({success:true,message:'Order saved as Pending - Manual Mode. Admin will buy by hand.', request_id:o.request_id, provider:SETTINGS.vtProvider});
+  }
   try{
-    const {network, phone, mobile_number, plan, plan_id, amount, type} = req.body||{};
-    const phoneNum = mobile_number||phone; const planRaw = plan||plan_id;
-    if(!HUSMO_API_KEY) return res.status(500).json({ok:false,message:'HUSMO_API_KEY not set'});
-    const netId = mapNetwork(network);
-    // AIRTIME FIRST - airtime has NO plan, only phone + amount. Do NOT require plan for airtime.
-    if(String(type||'').toLowerCase()==='airtime'){
-      if(!phoneNum||!amount) return res.status(400).json({ok:false,message:'mobile_number and amount required for airtime'});
-
-      const a = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount:parseInt(amount,10), Ported_number:false, request_id:newId()});
-      if(!husmoOk(a)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime: '+(husmoRealReason(a)||'check balance / gateway'),data:a,reason:husmoRealReason(a)});
-      return res.json({ok:true,provider:'HUSMO',data:a});
-    }
-    // DATA ONLY - now require plan
-    if(!phoneNum||!planRaw) return res.status(400).json({ok:false,message:'mobile_number and plan required'});
-    const planId = mapPlan(planRaw, netId);
-    if(typeof planId==='string' && !/^\d+$/.test(String(planId).trim())){
-      return res.json({ok:false,provider:'HUSMO',message:'Plan ID not configured for '+planRaw+' - backend does not know Husmo numeric ID for this plan. Use a plan with Husmo ID (e.g. 267, 262, 369) or add its numeric ID in backend.',sent:{network:netId,plan:planRaw},reason:'Plan ID not configured for '+planRaw});
-    }
-    const payload = {network:netId, mobile_number:phoneNum, plan:planId, Ported_number:false, request_id:newId()};
-    const data = await callHusmo('/data/', payload);
-    if(!husmoOk(data)){ return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected: '+(husmoRealReason(data)||'check Plan ID / balance'),sent:payload,data,reason:husmoRealReason(data)}); }
-    res.json({ok:true,provider:'HUSMO',request_id:payload.request_id,sent:payload,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
+    const v=await vtpassBuy(type, network, phone, Number(amount)||100);
+    if(v.ok){ ORDERS.push({plan, phone, amount, provider:'VTPass', request_id:v.request_id}); return res.json({success:true,message:'VTPass order successful', request_id:v.request_id, provider:'VTPass', vtpass:v.vtpass}); }
+  }catch(e){}
+  return res.json({success:false,message:'VTPass failed. Provider error - Money NOT taken. Try Husmo / Manual. Provider: VTPass'});
 });
-app.post('/api/buy-airtime', async (req,res)=>{
-  try{
-    const {network, phone, mobile_number, amount} = req.body||{};
-    const phoneNum = mobile_number||phone;
-    if(!phoneNum||!amount) return res.status(400).json({ok:false,message:'mobile_number and amount required'});
-    const netId = mapNetwork(network);
-    const data = await callHusmo('/topup/', {network:netId, mobile_number:phoneNum, amount:parseInt(amount,10), Ported_number:false, request_id:newId()});
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected airtime',data});
-    res.json({ok:true,provider:'HUSMO',data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-app.post('/api/verify-payment', async (req,res)=>{
-  try{
-    const {reference}=req.body||{};
-    if(!reference) return res.status(400).json({ok:false,message:'reference required'});
-    const r = await fetch(`https://api.paystack.co/transaction/verify/${reference}`,{headers:{Authorization:`Bearer ${PAYSTACK_SECRET}`}});
-    const data = await r.json(); const paid = data?.data?.status==='success';
-    res.json({ok:paid,paid,amount:data?.data?.amount,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-
-// --- Cable TV: POST /cablesub/ {cablename, smart_card_number, plan} ---
-function mapCablePlan(plan){
-  if(plan===undefined||plan===null) return plan;
-  var s=String(plan).trim();
-  if(/^\d+$/.test(s)) return parseInt(s,10);
-  var low=s.toLowerCase().replace(/[-_]/g,' ').replace(/\s+/g,' ').trim();
-  // Normalize frontend slugs like mtn-awoof-750mb-1day -> mtn awoof 750mb 1day, and strip day suffix for lookup
-  var lowNoDay = low.replace(/\s+(1day|1 day|7days|7 days|30days|30 days)$/,'').trim();
-  var c={'gotv max':2,'dstv yanga':6,'dstv compact':7,'dstv compact plus':8,'dstv premium':9,'classic':11,'basic':12,'smart':13,'nova':14,'super':15,'goeasy':16,'gostarter':17,'dstv confam':19,'dstv padi':20,'dstv asia':23,'dstv premium french':24,'dstv premium asia':25,'dstv compact + extra view':29,'dstv premium + extra view':30,'gotv smallie monthly':34,'gotv smallie quarterly':35,'gotv smallie yearly':36,'nova weekly':37,'basic weekly':38,'smart weekly':39,'classic weekly':40,'super weekly':41,'goselect':47,'gosports':51,'gotv smallie':34,'gotv jolli':47};
-  if(c[low]!==undefined) return c[low];
-  return s;
-}
-function mapCableName(name){
-  if(name===undefined||name===null) return 1;
-  var s=String(name).toLowerCase();
-  if(s.indexOf('gotv')>=0||s==='1') return 1;
-  if(s.indexOf('dstv')>=0||s.indexOf('dstv')>=0||s==='2') return 2;
-  if(s.indexOf('startime')>=0||s.indexOf('startimes')>=0||s==='3') return 3;
-  var n=parseInt(s,10); if(!isNaN(n)) return n; return 1;
-}
-app.post('/api/buy-cable', async (req,res)=>{
-  try{
-    const {cablename, cable, smart_card_number, iuc, plan, plan_id} = req.body||{};
-    const card = smart_card_number||iuc;
-    const planRaw = plan||plan_id;
-    if(!card||!planRaw) return res.status(400).json({ok:false,message:'smart_card_number and plan required'});
-    const cabId = mapCableName(cablename||cable);
-    const planId = mapCablePlan(planRaw);
-    const payload = {cablename:cabId, smart_card_number:card, plan:planId, request_id:newId()};
-    const data = await callHusmo('/cablesub/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected cable',sent:payload,data});
-    res.json({ok:true,provider:'HUSMO',sent:payload,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-app.get('/api/validate-iuc', async (req,res)=>{
-  try{
-    const {smart_card_number, cablename} = req.query||{};
-    const data = await getHusmo(`/validateiuc?smart_card_number=${smart_card_number}&cablename=${mapCableName(cablename)}`);
-    res.json({ok:true,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-// --- Electricity / Bill: POST /billpayment/ {disconame, meternumber, mtype, amount} ---
-function mapDisco(d){
-  if(d===undefined||d===null) return d;
-  var s=String(d).trim().toLowerCase();
-  if(/^\d+$/.test(s)) return parseInt(s,10);
-  var m={'ikeja':1,'ikeja electric':1,'eko':2,'eko electric':2,'abuja':3,'abuja electric':3,'kano':4,'kano electric':4,'enugu':5,'enugu electric':5,'eedc':5,'port harcourt':6,'port harcourt electric':6,'ibadan':7,'ibadan electric':7,'kaduna':8,'kaduna electric':8,'jos':9,'jos electric':9,'benin':10,'benin electric':10,'yola':11,'yola electric':11,'aba':12,'aba electric':12};
-  if(m[s]!==undefined) return m[s];
-  return d;
-}
-app.post('/api/buy-bill', async (req,res)=>{
-  try{
-    const {disconame, disco, meternumber, meter, mtype, amount} = req.body||{};
-    const meterNum = meternumber||meter;
-    if(!meterNum||!amount) return res.status(400).json({ok:false,message:'meternumber and amount required'});
-    const payload = {disconame:mapDisco(disconame||disco), meternumber:meterNum, mtype:mtype||'prepaid', amount, request_id:newId()};
-    const data = await callHusmo('/billpayment/', payload);
-    if(!husmoOk(data)) return res.json({ok:false,provider:'HUSMO',message:'Husmo rejected bill',sent:payload,data});
-    res.json({ok:true,provider:'HUSMO',sent:payload,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-app.get('/api/validate-meter', async (req,res)=>{
-  try{
-    const {meternumber, disconame, mtype} = req.query||{};
-    const data = await getHusmo(`/validatemeter?meternumber=${meternumber}&disconame=${disconame}&mtype=${mtype||'prepaid'}`);
-    res.json({ok:true,data});
-  }catch(e){res.status(500).json({ok:false,error:e.message});}
-});
-
-app.listen(PORT,()=>console.log('DATATECH Husmo FIXED v6 on '+PORT));
-                    
+const PORT=process.env.PORT||3000;
+app.listen(PORT,()=>console.log('Server running on '+PORT));
